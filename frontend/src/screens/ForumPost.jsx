@@ -2,6 +2,7 @@ import { useState, memo, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useForum } from '../hooks/useForum'
 import { Avatar, timeAgo } from '../components/PostCard'
+import EmptyIllustration from '../components/EmptyIllustration'
 import AppNav from '../components/AppNav'
 
 const ArrowLeft = () => (
@@ -303,8 +304,10 @@ export default function ForumPost() {
               textAlign: 'center', padding: '40px 20px',
               background: 'var(--bg-card)', border: '1px solid var(--border-light)',
               borderRadius: 16, color: 'var(--primary-text-muted)',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
             }}>
-              <p style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 600 }}>No replies yet</p>
+              <EmptyIllustration type="no-replies" size={72} />
+              <p style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>No replies yet</p>
               <p style={{ margin: 0, fontSize: 13 }}>Be the first to help out below ↓</p>
             </div>
           ) : (

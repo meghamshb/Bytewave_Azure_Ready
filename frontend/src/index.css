@@ -323,89 +323,40 @@ body {
 .text-label { font-size: var(--text-caption); font-weight: 600; letter-spacing: 0.5px; }
 .text-score { font-size: 20px; font-weight: 700; line-height: 28px; }
 
-/* ─── Physics skeleton: oscilloscope sine-wave ───────────────────────────────
-   The ::after layer tiles a seamless SVG sine wave as a background-image and
-   scrolls it left — exactly one period per animation cycle so it loops cleanly.
-   The SVG starts and ends at y=30 (mid-line) so horizontal tiling is seamless.
-   Colours are hardcoded (no CSS vars in data-URI) matching the ByteWave palette. */
+/* ─── Skeleton shimmer ────────────────────────────────────────────────────────
+   A clean gradient shimmer that sweeps right across the placeholder. */
 
 .bw-skeleton {
   position: relative;
   overflow: hidden;
   background: var(--bg-card);
   border: 1px solid var(--border-light);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
 }
 
-/* Faint grid layer — oscilloscope screen feel */
-.bw-skeleton::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    repeating-linear-gradient(
-      90deg,
-      transparent,
-      transparent 49px,
-      rgba(99,102,241,0.06) 49px,
-      rgba(99,102,241,0.06) 50px
-    ),
-    repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 19px,
-      rgba(99,102,241,0.06) 19px,
-      rgba(99,102,241,0.06) 20px
-    );
-  pointer-events: none;
-}
-
-/* Scrolling sine wave */
 .bw-skeleton::after {
   content: '';
   position: absolute;
-  /* vertically centred strip */
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
-  width: 100%;
-  height: 40px;
-
-  /*
-    One full sine cycle fits in a 200×40 tile:
-      M0,20  → starts at mid-line
-      ...bezier crest up to y=4, trough down to y=36 ...
-      200,20 → ends at mid-line  ← tiles seamlessly with next copy
-    Three layers: glow halo · main stroke · bright crest dot
-    We stack them with multiple background-image declarations.
-  */
-  background-image:
-    /* bright leading-crest dot at the first peak (x≈50, y≈4) */
-    radial-gradient(
-      circle 5px at 50px 4px,
-      rgba(196,181,253,1)   0%,
-      rgba(167,139,250,0.6) 50%,
-      transparent            100%
-    ),
-    /* main wave stroke (SVG tiled) */
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='40'%3E%3Cpath d='M0,20 C18,20 18,4 50,4 C82,4 82,20 100,20 C118,20 118,36 150,36 C182,36 182,20 200,20' fill='none' stroke='rgba(129%2C140%2C248%2C0.55)' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E"),
-    /* soft glow halo behind the wave */
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='40'%3E%3Cpath d='M0,20 C18,20 18,4 50,4 C82,4 82,20 100,20 C118,20 118,36 150,36 C182,36 182,20 200,20' fill='none' stroke='rgba(99%2C102%2C241%2C0.18)' stroke-width='8' stroke-linecap='round'/%3E%3C/svg%3E");
-
-  background-repeat: repeat-x, repeat-x, repeat-x;
-  background-size:   200px 40px, 200px 40px, 200px 40px;
-  background-position: 0 50%, 0 50%, 0 50%;
-
-  animation: bw-skel-scroll 1.6s linear infinite;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(99,102,241,0.10) 25%,
+    rgba(129,140,248,0.18) 50%,
+    rgba(99,102,241,0.10) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: bw-skel-shimmer 1.4s ease-in-out infinite;
+  animation-delay: var(--skel-delay, 0s);
   pointer-events: none;
 }
 
-@keyframes bw-skel-scroll {
-  /* scroll exactly one tile width → seamless loop */
-  from { background-position: 0 50%,   0 50%,   0 50%; }
-  to   { background-position: 200px 50%, 200px 50%, 200px 50%; }
+@keyframes bw-skel-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
-/* Legacy alias — keeps any leftover inline animation: skeleton-pulse references harmless */
 @keyframes skeleton-pulse {
   0%,100% { opacity: 0.6; }
   50%     { opacity: 1;   }

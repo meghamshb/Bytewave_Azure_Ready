@@ -120,6 +120,8 @@ class PhysicsSimulator {
             spring:     () => this._buildSpring(cx, groundY),
             incline:    () => this._buildIncline(cx, groundY),
             freefall:   () => this._buildFreefall(cx, groundY),
+            pulley:     () => this._buildPulley(cx, groundY),
+            circular:   () => this._buildCircular(cx, groundY),
         };
         (builders[this.sceneType] || (() => {}))();
     }
@@ -311,6 +313,104 @@ class PhysicsSimulator {
         this.bodies.ball = ball;
     }
 
+    _buildPulley(cx, groundY) {
+        const S = SIM.SCALE, p = this.params;
+        const m1 = p.m1 || 10;
+        const m2 = p.m2 || 5;
+        const pulleyY = groundY - SIM.H * 0.70;
+        const offset  = S * 1.4;
+
+        const r1 = Math.max(18, Math.min(36, 13 + m1 * 1.5));
+        const r2 = Math.max(14, Math.min(32,  9 + m2 * 1.5));
+
+        // Ceiling bar
+        const ceiling = Matter.Bodies.rectangle(cx, pulleyY - 16, SIM.W, 20, {
+            isStatic: true, render: { fillStyle: '#252840' },
+        });
+        // Pulley wheel (static, visual only)
+        const pulley = Matter.Bodies.circle(cx, pulleyY, 16, {
+            isStatic: true, label: 'pulley',
+            render: { fillStyle: '#94a3b8' },
+        });
+
+        const startY = pulleyY + S * 1.5;
+
+        // Mass 1 (left, starts higher if heavier so it falls)
+        const ball1 = Matter.Bodies.circle(cx - offset, startY, r1, {
+            label: 'ball1', friction: 0, frictionAir: 0.015, restitution: 0,
+            render: { fillStyle: '#2563eb' },
+        });
+        Matter.Body.setMass(ball1, m1);
+
+        // Mass 2 (right)
+        const ball2 = Matter.Bodies.circle(cx + offset, startY, r2, {
+            label: 'ball2', friction: 0, frictionAir: 0.015, restitution: 0,
+            render: { fillStyle: '#dc2626' },
+        });
+        Matter.Body.setMass(ball2, m2);
+
+        // Rope constraints — very low stiffness so they are visual only;
+        // physics is handled by our custom force application
+        const rope1 = Matter.Constraint.create({
+            pointA: { x: cx, y: pulleyY },
+            bodyB: ball1, pointB: { x: 0, y: -r1 },
+            length: startY - pulleyY - r1,
+            stiffness: 0.0001,
+            render: { strokeStyle: '#64748b', lineWidth: 2.5 },
+        });
+        const rope2 = Matter.Constraint.create({
+            pointA: { x: cx, y: pulleyY },
+            bodyB: ball2, pointB: { x: 0, y: -r2 },
+            length: startY - pulleyY - r2,
+            stiffness: 0.0001,
+            render: { strokeStyle: '#64748b', lineWidth: 2.5 },
+        });
+
+        Matter.Composite.add(this.engine.world, [ceiling, pulley, ball1, ball2, rope1, rope2]);
+        this.bodies.ball1 = ball1;
+        this.bodies.ball2 = ball2;
+        this.pulleyPos    = { x: cx, y: pulleyY };
+        this.pulleyOffset = offset;
+        this.r1 = r1; this.r2 = r2;
+    }
+
+    _buildCircular(cx, groundY) {
+        const S = SIM.SCALE, p = this.params;
+        // r in metres → scale to pixels, capped to fit canvas
+        const r  = Math.min((p.r || 1.5) * S * 0.72, SIM.H * 0.33);
+        const m  = p.mass || 1;
+        const v0 = p.v0  || 4;
+
+        const pivotX = cx;
+        const pivotY = groundY - SIM.H * 0.42;
+
+        const pivot = Matter.Bodies.circle(pivotX, pivotY, 8, {
+            isStatic: true, label: 'pivot',
+            render: { fillStyle: '#94a3b8' },
+        });
+        const ball = Matter.Bodies.circle(pivotX + r, pivotY, 18, {
+            label: 'ball', friction: 0, frictionAir: 0, restitution: 0,
+            render: { fillStyle: '#10b981' },
+        });
+        Matter.Body.setMass(ball, m);
+        // Initial tangential (perpendicular) velocity so ball orbits clockwise
+        Matter.Body.setVelocity(ball, { x: 0, y: v0 * SIM.V_CAL });
+
+        // Rigid rod constraint → provides centripetal force, keeps radius fixed
+        const rod = Matter.Constraint.create({
+            pointA: { x: pivotX, y: pivotY },
+            bodyB:  ball,
+            length: r,
+            stiffness: 1,
+            render: { strokeStyle: '#64748b', lineWidth: 2 },
+        });
+
+        Matter.Composite.add(this.engine.world, [pivot, ball, rod]);
+        this.bodies.ball   = ball;
+        this.pivotPos      = { x: pivotX, y: pivotY };
+        this.circleR       = r;
+    }
+
     // ─── Per-frame force application ───────────────────────────────────────────
 
     _applyForces() {
@@ -413,6 +513,54 @@ class PhysicsSimulator {
                 }
                 break;
             }
+
+            case 'circular': {
+                const ball = this.bodies.ball;
+                if (!ball) break;
+                const m = this.params.mass || 1;
+                // Cancel engine gravity so ball moves in a true horizontal-plane circle.
+                // The rigid-rod constraint then provides all centripetal force.
+                Matter.Body.applyForce(ball, ball.position, { x: 0, y: -m * SIM.GS });
+                break;
+            }
+
+            case 'pulley': {
+                const { ball1, ball2 } = this.bodies;
+                if (!ball1 || !ball2 || !this.pulleyPos) break;
+
+                const m1  = this.params.m1 || 10;
+                const m2  = this.params.m2 || 5;
+                const px  = this.pulleyPos.x;
+                const off = this.pulleyOffset;
+
+                // Lock x positions — Atwood machine moves vertically only
+                Matter.Body.setPosition(ball1, { x: px - off, y: ball1.position.y });
+                Matter.Body.setPosition(ball2, { x: px + off, y: ball2.position.y });
+                Matter.Body.setVelocity(ball1,  { x: 0, y: ball1.velocity.y });
+                Matter.Body.setVelocity(ball2,  { x: 0, y: ball2.velocity.y });
+
+                // Atwood tension: T = 2·m1·m2·g / (m1+m2)
+                // In Matter.js force units: F_mjs = F_Newton · SIM.GS / SIM.G
+                // Since SIM.G cancels: T_mjs = 2·m1·m2·SIM.GS / (m1+m2)
+                const T_mjs = 2 * m1 * m2 * SIM.GS / (m1 + m2);
+                Matter.Body.applyForce(ball1, ball1.position, { x: 0, y: -T_mjs });
+                Matter.Body.applyForce(ball2, ball2.position, { x: 0, y: -T_mjs });
+
+                // Enforce inextensible rope: v1 + v2 = 0  →  each gets (v1−v2)/2
+                const vHalf = (ball1.velocity.y - ball2.velocity.y) / 2;
+                Matter.Body.setVelocity(ball1, { x: 0, y:  vHalf });
+                Matter.Body.setVelocity(ball2, { x: 0, y: -vHalf });
+
+                // Auto-reset when a mass hits the floor or gets within 40px of pulley
+                const minY = this.pulleyPos.y + 40;
+                if (!this._resetScheduled &&
+                    (ball1.position.y > this.groundY - 30 || ball2.position.y > this.groundY - 30 ||
+                     ball1.position.y < minY || ball2.position.y < minY)) {
+                    this._resetScheduled = true;
+                    setTimeout(() => this._buildScene(), 1200);
+                }
+                break;
+            }
         }
     }
 
@@ -430,6 +578,8 @@ class PhysicsSimulator {
             spring:     () => this._ovlSpring(ctx),
             incline:    () => this._ovlIncline(ctx),
             freefall:   () => this._ovlFreefall(ctx),
+            pulley:     () => this._ovlPulley(ctx),
+            circular:   () => this._ovlCircular(ctx),
         };
         (draw[this.sceneType] || (() => {}))();
         this._drawEquationBar(ctx);
@@ -633,6 +783,127 @@ class PhysicsSimulator {
             this._arrow(ctx, x + 36, y, x + 36, y + vy*6, '#34d399', 'v', x + 52, y + vy*3);
     }
 
+    _ovlPulley(ctx) {
+        const { ball1, ball2 } = this.bodies;
+        if (!ball1 || !ball2 || !this.pulleyPos) return;
+        const p  = this.params;
+        const m1 = p.m1 || 10, m2 = p.m2 || 5;
+        const r1 = this.r1 || 20, r2 = this.r2 || 16;
+        const { x: px, y: py } = this.pulleyPos;
+        const PULLEY_R = 16;
+
+        // Draw rope: ball1 top → pulley left side → arc → pulley right side → ball2 top
+        ctx.save();
+        ctx.strokeStyle = '#64748b';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(ball1.position.x, ball1.position.y - r1);
+        ctx.lineTo(px - PULLEY_R, py);
+        ctx.arc(px, py, PULLEY_R, Math.PI, 0, false);
+        ctx.lineTo(ball2.position.x, ball2.position.y - r2);
+        ctx.stroke();
+        ctx.restore();
+
+        // Mass labels
+        this._bodyLabel(ctx, ball1.position.x, ball1.position.y, `m₁=${m1}kg`);
+        this._bodyLabel(ctx, ball2.position.x, ball2.position.y, `m₂=${m2}kg`);
+
+        // Weight arrows (downward)
+        this._arrow(ctx,
+            ball1.position.x, ball1.position.y + r1,
+            ball1.position.x, ball1.position.y + r1 + 48,
+            '#f87171', 'm₁g', ball1.position.x + 30, ball1.position.y + r1 + 56);
+        this._arrow(ctx,
+            ball2.position.x, ball2.position.y + r2,
+            ball2.position.x, ball2.position.y + r2 + 48,
+            '#f87171', 'm₂g', ball2.position.x + 30, ball2.position.y + r2 + 56);
+
+        // Tension arrows (upward)
+        this._arrow(ctx,
+            ball1.position.x, ball1.position.y - r1,
+            ball1.position.x, ball1.position.y - r1 - 48,
+            '#34d399', 'T', ball1.position.x + 14, ball1.position.y - r1 - 54);
+        this._arrow(ctx,
+            ball2.position.x, ball2.position.y - r2,
+            ball2.position.x, ball2.position.y - r2 - 48,
+            '#34d399', 'T', ball2.position.x + 14, ball2.position.y - r2 - 54);
+
+        // Velocity arrow on the descending mass
+        const vy1 = ball1.velocity.y;
+        if (Math.abs(vy1) > 0.08) {
+            const d = vy1 > 0 ? 1 : -1;
+            const ax = ball1.position.x + r1 + 12;
+            this._arrow(ctx, ax, ball1.position.y, ax, ball1.position.y + d * 44,
+                '#fbbf24', 'v', ax + 14, ball1.position.y + d * 22);
+        }
+
+        // Pulley axle dot
+        ctx.save();
+        ctx.fillStyle = '#cbd5e1';
+        ctx.beginPath();
+        ctx.arc(px, py, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+
+    _ovlCircular(ctx) {
+        const ball = this.bodies.ball;
+        if (!ball || !this.pivotPos) return;
+        const { x, y } = ball.position;
+        const { x: px, y: py } = this.pivotPos;
+        const p    = this.params;
+        const m    = p.mass || 1;
+        const v0   = p.v0   || 4;
+        const r_m  = p.r    || 1.5;
+
+        // Dashed orbit circle
+        ctx.save();
+        ctx.strokeStyle = 'rgba(16,185,129,0.22)';
+        ctx.lineWidth   = 1.5;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.arc(px, py, this.circleR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+
+        // Radius line (pivot → ball)
+        ctx.save();
+        ctx.strokeStyle = 'rgba(100,116,139,0.55)';
+        ctx.lineWidth   = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(x, y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+
+        // Centripetal-force arrow (ball → pivot)
+        const dx = px - x, dy = py - y;
+        const len = Math.hypot(dx, dy);
+        if (len > 0) {
+            const tx = x + (dx / len) * 56, ty = y + (dy / len) * 56;
+            this._arrow(ctx, x, y, tx, ty, '#f87171', 'Fₒ', tx + 10, ty - 12);
+        }
+
+        // Velocity arrow (tangential)
+        const vx = ball.velocity.x, vy = ball.velocity.y;
+        const sc = 5;
+        if (Math.hypot(vx, vy) > 0.08) {
+            this._arrow(ctx, x, y, x + vx * sc, y + vy * sc,
+                '#34d399', 'v', x + vx * sc / 2 + 14, y + vy * sc / 2 - 10);
+        }
+
+        // Pivot dot label
+        ctx.save();
+        ctx.font      = 'bold 11px Inter, sans-serif';
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'center';
+        ctx.fillText('pivot', px, py - 14);
+        ctx.restore();
+
+        // Mass label on ball
+        this._bodyLabel(ctx, x, y, `m=${m}kg`);
+    }
+
     // ─── Live equation bar at bottom of canvas ──────────────────────────────
 
     _drawEquationBar(ctx) {
@@ -683,6 +954,24 @@ class PhysicsSimulator {
             case 'freefall':
                 eq = `a = g = ${G} m/s²  (free fall)`;
                 break;
+            case 'pulley': {
+                const m1 = p.m1 || 10, m2 = p.m2 || 5;
+                const a  = (G * (m1 - m2) / (m1 + m2)).toFixed(2);
+                const T  = (2 * m1 * m2 * G / (m1 + m2)).toFixed(1);
+                eq = `a = (m₁−m₂)g/(m₁+m₂) = ${a} m/s²   T = ${T} N`;
+                break;
+            }
+            case 'circular': {
+                const r   = p.r    || 1.5;
+                const v0  = p.v0   || 4;
+                const m   = p.mass || 1;
+                const ac  = (v0 * v0 / r).toFixed(2);
+                const Fc  = (m * v0 * v0 / r).toFixed(1);
+                const Tpr = v0 > 0 ? (2 * Math.PI * r / v0).toFixed(2) : '∞';
+                const om  = v0 > 0 ? (v0 / r).toFixed(2) : '0';
+                eq = `aₒ = v²/r = ${ac} m/s²   Fₒ = ${Fc} N   T = ${Tpr} s   ω = ${om} rad/s`;
+                break;
+            }
         }
         if (!eq) return;
 

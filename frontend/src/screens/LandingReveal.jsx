@@ -8,6 +8,7 @@
  *      story plays first, then the live study dashboard follows below it.
  */
 
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import ScrollReveal from '../components/ScrollReveal'
 import DraggableTiles from '../components/DraggableTiles'
@@ -32,6 +33,20 @@ const S = {
 }
 
 export default function LandingReveal() {
+  const [communityStats, setCommunityStats] = useState(null)
+
+  useEffect(() => {
+    fetch('/api/forum/posts')
+      .then(r => r.ok ? r.json() : [])
+      .then(posts => {
+        if (!Array.isArray(posts)) return
+        const totalPosts = posts.length
+        const totalReplies = posts.reduce((s, p) => s + (p.replies?.length ?? 0), 0)
+        setCommunityStats({ posts: totalPosts, discussions: totalPosts + totalReplies })
+      })
+      .catch(() => {})
+  }, [])
+
   return (
     <>
       {/* ── Problem → Solution strip ── */}
@@ -88,9 +103,9 @@ export default function LandingReveal() {
           display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8,
         }}>
           {[
-            { num: '247+', label: 'Beta students',     sub: 'on the waitlist right now',              color: '#818cf8' },
-            { num: '3.2×', label: 'Avg score lift',    sub: 'after 5 cases vs. re-reading alone',     color: '#22c55e' },
-            { num: '<60s', label: 'To your first gap', sub: 'from sign-up to personalized feedback',  color: '#a78bfa' },
+            { num: '30+',  label: 'Practice cases',    sub: 'across all physics topics',              color: '#818cf8' },
+            { num: '10',   label: 'Physics topics',    sub: 'covering the full syllabus',              color: '#22c55e' },
+            { num: '<2s',  label: 'AI feedback',       sub: 'instant analysis per question',           color: '#a78bfa' },
           ].map(({ num, label, sub, color }) => (
             <div key={label} style={{ textAlign: 'center', padding: '8px 16px' }}>
               <div style={{ fontFamily: 'var(--font-display)', fontSize: 'clamp(32px, 4.5vw, 50px)', fontWeight: 800, lineHeight: 1, color, marginBottom: 6 }}>{num}</div>
@@ -263,7 +278,25 @@ export default function LandingReveal() {
               </div>
             ))}
           </div>
-          <div style={{ textAlign: 'center', marginTop: 32 }}>
+          {communityStats && (
+            <div style={{
+              display: 'flex', justifyContent: 'center', gap: 24, marginTop: 28,
+              flexWrap: 'wrap',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#22c55e', display: 'inline-block', animation: 'pulse-dot 1.8s ease-in-out infinite' }} />
+                <span style={{ fontSize: 13, color: 'var(--primary-text-muted)' }}>
+                  <strong style={{ color: 'var(--accent-main)', fontWeight: 800 }}>{communityStats.discussions}</strong> discussions and counting
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, color: 'var(--primary-text-muted)' }}>
+                  <strong style={{ color: 'var(--accent-main)', fontWeight: 800 }}>{communityStats.posts}</strong> topics posted
+                </span>
+              </div>
+            </div>
+          )}
+          <div style={{ textAlign: 'center', marginTop: communityStats ? 16 : 32 }}>
             <Link to="/forum" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '10px 24px', borderRadius: 10, background: 'var(--bg-card)', border: '1px solid var(--border-light)', color: 'var(--primary-text-muted)', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
               <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
               Browse community discussions →

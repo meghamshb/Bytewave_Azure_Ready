@@ -401,12 +401,14 @@ async function fetchPostsFromServer() {
 export function useForum() {
   const [posts,   setPosts]   = useState(() => initPosts())
   const [upvoted, setUpvoted] = useState(() => loadUpvoted())
+  const [loading, setLoading] = useState(true)
 
-  // On mount, try to pull fresh posts from the server
+  // On mount, try to pull fresh posts from the server (min 600ms so skeleton is visible)
   useEffect(() => {
-    fetchPostsFromServer().then(serverPosts => {
-      if (serverPosts) setPosts(serverPosts)
-    })
+    const minDelay = new Promise(r => setTimeout(r, 600))
+    Promise.all([fetchPostsFromServer(), minDelay])
+      .then(([serverPosts]) => { if (serverPosts) setPosts(serverPosts) })
+      .finally(() => setLoading(false))
   }, [])
 
   // Sync from localStorage whenever another instance mutates it
@@ -472,11 +474,12 @@ export function useForum() {
   }, []) // stable
 
   // ── Add post ──────────────────────────────────────────────────────────────
-  const addPost = useCallback((title, body, tags, author = 'Student', videoUrl = null) => {
+  const addPost = useCallback((title, body, tags, author = 'Student', videoUrl = null, caseId = null) => {
     const newPost = {
       id: generateId(), title, body, author,
       createdAt: new Date().toISOString(),
       tags, videoUrl, upvotes: 0, replies: [],
+      ...(caseId ? { case_id: caseId } : {}),
     }
     setPosts(prev => {
       const next = [newPost, ...prev]
@@ -506,6 +509,11 @@ export function useForum() {
   const getPost    = useCallback((id) => posts.find(p => p.id === id) ?? null, [posts])
   const hasUpvoted = useCallback((key) => upvoted.has(key), [upvoted])
 
+  const getPostsForCase = useCallback((caseId) => {
+    if (!caseId) return []
+    return posts.filter(p => p.case_id === caseId).sort((a, b) => (b.upvotes ?? 0) - (a.upvotes ?? 0))
+  }, [posts])
+
   const findRelated = useCallback((keywords) => {
     if (!keywords?.length) return []
     const lower = keywords.map(k => k.toLowerCase())
@@ -514,5 +522,5 @@ export function useForum() {
       .slice(0, 3)
   }, [posts])
 
-  return { posts, upvoted, upvotePost, upvoteReply, hasUpvoted, addPost, addReply, getPost, findRelated }
+  return { posts, loading, upvoted, upvotePost, upvoteReply, hasUpvoted, addPost, addReply, getPost, getPostsForCase, findRelated }
 }

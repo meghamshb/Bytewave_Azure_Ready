@@ -33,13 +33,20 @@ const styles = {
   },
   iconWrap: { marginBottom: 14 },
   title: { margin: '0 0 6px', fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 600, color: 'var(--primary-text)' },
-  subtitle: { margin: 0, fontSize: 13, color: 'var(--primary-text-muted)' },
+  subtitle: { margin: 0, fontSize: 13, color: 'var(--primary-text-muted)', lineHeight: 1.5 },
   footer: { marginTop: 18, fontSize: 14, fontWeight: 600, color: 'var(--rec-high)' },
   match: { fontFamily: 'var(--font-readout)', fontSize: 20, fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'var(--rec-high)', marginTop: 8 },
 }
 
-export default memo(function CaseCard({ title, subtitle, matchPercent, topicId, onClick }) {
+export default memo(function CaseCard({ title, subtitle, matchPercent, topicId, status, onClick }) {
   const [hover, setHover] = React.useState(false)
+
+  const statusBadge = status === 'mastered'
+    ? { label: '✓ Mastered', color: '#34d399', bg: 'rgba(52,211,153,0.12)' }
+    : status === 'attempted'
+    ? { label: 'Attempted', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' }
+    : null
+
   return (
     <button
       type="button"
@@ -49,6 +56,21 @@ export default memo(function CaseCard({ title, subtitle, matchPercent, topicId, 
       onMouseLeave={() => setHover(false)}
     >
       <div style={styles.corner} aria-hidden />
+
+      {statusBadge && (
+        <div style={{
+          position: 'absolute', top: 12, right: 12,
+          fontSize: 10, fontWeight: 700,
+          color: statusBadge.color,
+          background: statusBadge.bg,
+          border: `1px solid ${statusBadge.color}30`,
+          padding: '2px 10px', borderRadius: 20,
+          letterSpacing: '0.04em',
+        }}>
+          {statusBadge.label}
+        </div>
+      )}
+
       {topicId && (
         <div style={styles.iconWrap}>
           <TopicIcon topicId={topicId} />
@@ -57,7 +79,9 @@ export default memo(function CaseCard({ title, subtitle, matchPercent, topicId, 
       <h3 style={styles.title}>{title}</h3>
       {subtitle && <p style={styles.subtitle}>{subtitle}</p>}
       {matchPercent != null && <p style={styles.match}>{matchPercent}% match</p>}
-      <p style={styles.footer}>Start →</p>
+      <p style={styles.footer}>
+        {status === 'mastered' ? 'Practice again →' : status === 'attempted' ? 'Retry →' : 'Start →'}
+      </p>
     </button>
   )
 })

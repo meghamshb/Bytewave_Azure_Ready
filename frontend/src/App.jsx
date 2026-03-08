@@ -24,6 +24,7 @@ function PageFallback() {
       minHeight: '100vh', display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center',
       background: 'var(--primary-bg)', gap: 0,
+      animation: 'pageFallbackIn 0.3s ease 400ms both',
     }}>
       <div style={{
         fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 700,
@@ -31,6 +32,12 @@ function PageFallback() {
         marginBottom: 4, opacity: 0.5,
       }}>Byte Wave</div>
       <PhysicsLoader label="Loading…" />
+      <style>{`
+        @keyframes pageFallbackIn {
+          from { opacity: 0; }
+          to   { opacity: 1; }
+        }
+      `}</style>
     </div>
   )
 }

@@ -1,2 +1,4 @@
 # Install after core deps. On macOS first run: brew install cairo pkg-config ffmpeg
 manim>=0.18.0
+# Voiceover support (Coqui XTTS v2 for 3Blue1Brown-style voice cloning)
+manim-voiceover[coqui]>=0.3.4

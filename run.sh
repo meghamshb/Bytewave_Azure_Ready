@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 # ── Backend (FastAPI on :8000) ────────────────────────────────────────────────
 echo "Starting Byte Wave API on http://localhost:8000 …"
 cd "$ROOT"
-python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000 &
+python -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 
 # ── Frontend (Vite on :5173) ──────────────────────────────────────────────────

@@ -14,7 +14,7 @@
  * The Home (study dashboard) is NOT shown here — that lives at /learn.
  */
 
-import { lazy, Suspense, useRef } from 'react'
+import { lazy, Suspense, useRef, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Link, useNavigate } from 'react-router-dom'
 import WaveMark from './WaveMark'
@@ -23,9 +23,16 @@ const MarketingContent = lazy(() => import('../screens/LandingReveal'))
 
 const EASE = [0.22, 1, 0.36, 1]
 
+const preloadLearnChunks = () => {
+  import('../screens/Home').catch(() => {})
+  import('./LearnLayout').catch(() => {})
+}
+
 export default function HeroDashboard({ onClose }) {
   const navigate    = useNavigate()
   const scrollRef   = useRef(null)
+
+  useEffect(() => { preloadLearnChunks() }, [])
 
   const scrollDown = () => {
     scrollRef.current?.scrollBy({ top: window.innerHeight * 0.85, behavior: 'smooth' })
@@ -79,6 +86,7 @@ export default function HeroDashboard({ onClose }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <button
             onClick={() => navigate('/learn')}
+            onMouseEnter={preloadLearnChunks}
             style={{
               padding:      '7px 18px',
               borderRadius: 8,
@@ -341,6 +349,7 @@ export default function HeroDashboard({ onClose }) {
                 transition:   'transform 0.15s, box-shadow 0.15s',
               }}
               onMouseEnter={e => {
+                preloadLearnChunks()
                 e.currentTarget.style.transform  = 'translateY(-2px)'
                 e.currentTarget.style.boxShadow  = '0 10px 36px rgba(99,102,241,0.55)'
               }}

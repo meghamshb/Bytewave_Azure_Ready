@@ -59,7 +59,7 @@ export function useHoldActivation({ duration = 800, onActivate } = {}) {
 
   /** Cancel hold — wired to onSplineMouseUp / onSplineMouseLeave */
   const cancelHold = useCallback(() => {
-    if (activatedRef.current) return // stay activated — never reset
+    if (activatedRef.current) return
     clearTimeout(timerRef.current)
     cancelAnimationFrame(rafRef.current)
     startTimeRef.current = null
@@ -67,5 +67,16 @@ export function useHoldActivation({ duration = 800, onActivate } = {}) {
     setProgress(0)
   }, [])
 
-  return { isHolding, activated, progress, startHold, cancelHold }
+  /** Reset — allows re-activation after the dashboard is dismissed */
+  const reset = useCallback(() => {
+    clearTimeout(timerRef.current)
+    cancelAnimationFrame(rafRef.current)
+    startTimeRef.current = null
+    activatedRef.current = false
+    setActivated(false)
+    setIsHolding(false)
+    setProgress(0)
+  }, [])
+
+  return { isHolding, activated, progress, startHold, cancelHold, reset }
 }

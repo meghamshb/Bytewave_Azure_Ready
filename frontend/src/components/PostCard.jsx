@@ -99,7 +99,8 @@ const MAX_TAGS = 3
 //   onUpvote  — (postId) => void  — from parent's useForum
 //   didUpvote — boolean           — precomputed by parent
 
-function PostCard({ post, onUpvote, didUpvote = false, compact = false }) {
+function PostCard({ post, onUpvote, didUpvote = false, compact = false, variant = 'default' }) {
+  const isTip = variant === 'tip'
   const navigate   = useNavigate()
   const [hover, setHover] = useState(false)
 
@@ -117,9 +118,11 @@ function PostCard({ post, onUpvote, didUpvote = false, compact = false }) {
     ...(hover ? S.cardHover : S.cardBase),
   }
 
+  const isCompactLayout = compact || isTip
+
   const upvoteColStyle = {
     ...S.upvoteCol,
-    ...(compact ? S.upvoteColCompact : S.upvoteColFull),
+    ...(isCompactLayout ? S.upvoteColCompact : S.upvoteColFull),
     ...(didUpvote ? S.upvotedBg : {}),
   }
 
@@ -154,11 +157,11 @@ function PostCard({ post, onUpvote, didUpvote = false, compact = false }) {
       {/* ── Right: Content ── */}
       <button
         type="button"
-        onClick={() => navigate(`/forum/${post.id}`)}
-        style={{ ...S.content, ...(compact ? S.contentCompact : S.contentFull) }}
+        onClick={() => !isTip && navigate(`/forum/${post.id}`)}
+        style={{ ...S.content, ...(isCompactLayout ? S.contentCompact : S.contentFull), ...(isTip ? { cursor: 'default' } : {}) }}
       >
         {/* Animation badge */}
-        {post.videoUrl && (
+        {!isTip && post.videoUrl && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: -2 }}>
             <div style={S.animBadge}><PlayIcon /> Manim animation</div>
           </div>
@@ -166,7 +169,7 @@ function PostCard({ post, onUpvote, didUpvote = false, compact = false }) {
 
         {/* Author row */}
         <div style={S.authorRow}>
-          <Avatar name={post.author} size={compact ? 26 : 32} />
+          <Avatar name={post.author} size={isCompactLayout ? 26 : 32} />
           <div style={S.authorMeta}>
             <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--primary-text)' }}>{post.author}</span>
             <span style={{ fontSize: 12, color: 'var(--primary-text-muted)' }}>·</span>
@@ -174,46 +177,57 @@ function PostCard({ post, onUpvote, didUpvote = false, compact = false }) {
           </div>
         </div>
 
-        {/* Title */}
-        <p style={{
-          margin: 0, fontFamily: 'var(--font-display)',
-          fontSize: compact ? 14 : 15, fontWeight: 700, color: 'var(--primary-text)',
-          lineHeight: 1.45, display: '-webkit-box',
-          WebkitLineClamp: compact ? 2 : 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-        }}>
-          {post.title}
-        </p>
-
-        {/* Body preview */}
-        {!compact && post.body && (
+        {isTip ? (
           <p style={{
-            margin: 0, fontSize: 13, color: 'var(--primary-text-muted)', lineHeight: 1.55,
-            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+            margin: 0, fontSize: 13, color: 'var(--primary-text)', lineHeight: 1.55,
+            display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
           }}>
-            {post.body}
+            {post.body || post.title}
           </p>
-        )}
+        ) : (
+          <>
+            {/* Title */}
+            <p style={{
+              margin: 0, fontFamily: 'var(--font-display)',
+              fontSize: isCompactLayout ? 14 : 15, fontWeight: 700, color: 'var(--primary-text)',
+              lineHeight: 1.45, display: '-webkit-box',
+              WebkitLineClamp: isCompactLayout ? 2 : 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+            }}>
+              {post.title}
+            </p>
 
-        {/* Footer */}
-        <div style={S.footer}>
-          <div style={S.tagRow}>
-            {visibleTags.map(tag => (
-              <span key={tag} style={S.tag}>{tag}</span>
-            ))}
-            {extraTags > 0 && <span style={S.tagExtra}>+{extraTags}</span>}
-          </div>
-          <span style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            fontSize: 12, fontWeight: 600, flexShrink: 0,
-            color: replyCount > 0 ? 'var(--accent-main)' : 'var(--primary-text-muted)',
-            background: replyCount > 0 ? 'rgba(99,102,241,0.09)' : 'transparent',
-            border: replyCount > 0 ? '1px solid rgba(99,102,241,0.18)' : 'none',
-            padding: replyCount > 0 ? '3px 10px 3px 8px' : '0',
-            borderRadius: 20,
-          }}>
-            <ReplyIcon /> {replyCount}
-          </span>
-        </div>
+            {/* Body preview */}
+            {!isCompactLayout && post.body && (
+              <p style={{
+                margin: 0, fontSize: 13, color: 'var(--primary-text-muted)', lineHeight: 1.55,
+                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+              }}>
+                {post.body}
+              </p>
+            )}
+
+            {/* Footer */}
+            <div style={S.footer}>
+              <div style={S.tagRow}>
+                {visibleTags.map(tag => (
+                  <span key={tag} style={S.tag}>{tag}</span>
+                ))}
+                {extraTags > 0 && <span style={S.tagExtra}>+{extraTags}</span>}
+              </div>
+              <span style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                fontSize: 12, fontWeight: 600, flexShrink: 0,
+                color: replyCount > 0 ? 'var(--accent-main)' : 'var(--primary-text-muted)',
+                background: replyCount > 0 ? 'rgba(99,102,241,0.09)' : 'transparent',
+                border: replyCount > 0 ? '1px solid rgba(99,102,241,0.18)' : 'none',
+                padding: replyCount > 0 ? '3px 10px 3px 8px' : '0',
+                borderRadius: 20,
+              }}>
+                <ReplyIcon /> {replyCount}
+              </span>
+            </div>
+          </>
+        )}
       </button>
     </div>
   )

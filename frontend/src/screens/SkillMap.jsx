@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import TopicAnimation from '../components/TopicAnimation'
 import Skeleton from '../components/Skeleton'
-import { MOCK_PROGRESS } from '../mockData'
+import EmptyIllustration from '../components/EmptyIllustration'
+
 import { getTopicById } from '../physicsTopics'
 import { useUserId } from '../hooks/useAuth'
 import { track, EVENTS } from '../hooks/useAnalytics'
@@ -42,9 +43,9 @@ const EDGES = [
 
 // Status visual config
 const CFG = {
-  'not-started': { ring: '#374151', glow: 'none',                              dot: '#4b5563', label: 'Not started', bar: '#374151' },
-  'in-progress': { ring: '#fbbf24', glow: '0 0 22px rgba(251,191,36,0.55)',   dot: '#fbbf24', label: 'In progress', bar: '#fbbf24' },
-  'mastered':    { ring: '#34d399', glow: '0 0 22px rgba(52,211,153,0.55)',    dot: '#34d399', label: 'Mastered',    bar: '#34d399' },
+  'not-started': { ring: '#6b7280', ringActive: '#a5b4fc', glow: 'none',                              dot: '#6b7280', label: 'Not started', bar: '#6b7280' },
+  'in-progress': { ring: '#fbbf24', ringActive: '#fbbf24', glow: '0 0 22px rgba(251,191,36,0.55)',   dot: '#fbbf24', label: 'In progress', bar: '#fbbf24' },
+  'mastered':    { ring: '#34d399', ringActive: '#34d399', glow: '0 0 22px rgba(52,211,153,0.55)',    dot: '#34d399', label: 'Mastered',    bar: '#34d399' },
 }
 
 function statusKey(node) {
@@ -62,7 +63,7 @@ function DetailPanel({ node, onStart }) {
         alignItems: 'center', justifyContent: 'center', gap: 12,
         padding: 32, color: 'var(--primary-text-muted)',
       }}>
-        <div style={{ fontSize: 40, opacity: 0.3 }}>✦</div>
+        <EmptyIllustration type="no-selection" size={72} />
         <p style={{ margin: 0, fontSize: 14, textAlign: 'center' }}>
           Click any node<br />to explore that topic
         </p>
@@ -72,6 +73,7 @@ function DetailPanel({ node, onStart }) {
 
   const sk      = statusKey(node)
   const cfg     = CFG[sk]
+  const accentColor = cfg.ringActive
   const topic   = getTopicById(node.skill_id)
   const mastery = node.mastery_score ?? 0
   const circ    = 2 * Math.PI * 40
@@ -91,10 +93,9 @@ function DetailPanel({ node, onStart }) {
         borderRadius: 20, padding: '24px 0',
         position: 'relative', overflow: 'hidden',
       }}>
-        {/* subtle glow behind the animation */}
         <div style={{
           position: 'absolute', inset: 0,
-          background: `radial-gradient(ellipse 60% 50% at 50% 50%, ${cfg.ring}18, transparent 70%)`,
+          background: `radial-gradient(ellipse 60% 50% at 50% 50%, ${accentColor}18, transparent 70%)`,
           pointerEvents: 'none',
         }} />
         <TopicAnimation topicId={node.skill_id} size={120} />
@@ -112,8 +113,8 @@ function DetailPanel({ node, onStart }) {
           </h2>
           <span style={{
             fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
-            letterSpacing: '0.07em', color: cfg.ring,
-            background: `${cfg.ring}18`, border: `1px solid ${cfg.ring}40`,
+            letterSpacing: '0.07em', color: accentColor,
+            background: `${accentColor}18`, border: `1px solid ${accentColor}40`,
             padding: '2px 8px', borderRadius: 20, flexShrink: 0,
           }}>
             {sk === 'mastered' ? '✓ ' : ''}{cfg.label}
@@ -130,19 +131,18 @@ function DetailPanel({ node, onStart }) {
 
       {/* ── Mastery ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-        {/* ring */}
         <svg width={90} height={90} style={{ flexShrink: 0 }}>
           <circle cx={45} cy={45} r={40} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={6} />
           <circle
             cx={45} cy={45} r={40}
-            fill="none" stroke={cfg.ring} strokeWidth={6}
+            fill="none" stroke={accentColor} strokeWidth={6}
             strokeDasharray={circ} strokeDashoffset={circ * (1 - mastery / 100)}
             strokeLinecap="round" transform="rotate(-90 45 45)"
             style={{ transition: 'stroke-dashoffset 1s cubic-bezier(0.4,0,0.2,1)' }}
           />
           <text x="45" y="51" textAnchor="middle"
             fontSize={mastery > 0 ? 17 : 13} fontWeight="800"
-            fill={mastery > 0 ? cfg.ring : 'var(--primary-text-muted)'}
+            fill={mastery > 0 ? accentColor : 'var(--primary-text-muted)'}
             fontFamily="var(--font-display)">
             {mastery > 0 ? `${mastery}%` : '—'}
           </text>
@@ -169,12 +169,16 @@ function DetailPanel({ node, onStart }) {
           padding: '13px 0', borderRadius: 14, width: '100%',
           background: sk === 'mastered'
             ? 'rgba(52,211,153,0.12)'
-            : 'linear-gradient(135deg, rgba(99,102,241,0.3), rgba(139,92,246,0.2))',
-          border: `1.5px solid ${cfg.ring}`,
-          color: cfg.ring,
+            : sk === 'not-started'
+              ? 'linear-gradient(135deg, rgba(99,102,241,0.35), rgba(139,92,246,0.25))'
+              : 'linear-gradient(135deg, rgba(99,102,241,0.3), rgba(139,92,246,0.2))',
+          border: `1.5px solid ${sk === 'not-started' ? '#818cf8' : accentColor}`,
+          color: sk === 'not-started' ? '#c7d2fe' : accentColor,
           fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700,
           cursor: 'pointer', letterSpacing: '0.02em',
-          boxShadow: `0 0 20px ${cfg.ring}25`,
+          boxShadow: sk === 'not-started'
+            ? '0 0 24px rgba(99,102,241,0.35)'
+            : `0 0 20px ${accentColor}25`,
           transition: 'all 0.2s ease',
         }}
       >
@@ -185,7 +189,7 @@ function DetailPanel({ node, onStart }) {
 }
 
 // ─── SVG Constellation ────────────────────────────────────────────────────────
-function Constellation({ nodes, selected, onSelect }) {
+function Constellation({ nodes, selected, onSelect, filter }) {
   const [hovered, setHovered] = useState(null)
 
   // Pre-compute status lookup for fast access
@@ -234,13 +238,15 @@ function Constellation({ nodes, selected, onSelect }) {
           const nodeA = byId[a], nodeB = byId[b]
           const bothMastered = nodeA?.status === 'Mastered' && nodeB?.status === 'Mastered'
           const eitherActive = active === a || active === b
+          const activeNode = active === a ? nodeA : active === b ? nodeB : null
+          const activeColor = activeNode ? CFG[statusKey(activeNode)]?.ringActive : null
           return (
             <line
               key={`${a}-${b}`}
               x1={na.x} y1={na.y} x2={nb.x} y2={nb.y}
               stroke={
                 bothMastered   ? '#34d39950'
-                : eitherActive ? 'rgba(99,102,241,0.55)'
+                : eitherActive ? `${activeColor || '#6366f1'}88`
                 : 'rgba(255,255,255,0.07)'
               }
               strokeWidth={eitherActive ? 1.8 : 1}
@@ -259,13 +265,16 @@ function Constellation({ nodes, selected, onSelect }) {
           const isSel = selected === n.skill_id
           const isHov = hovered  === n.skill_id
           const isAct = isSel || isHov
+          const matchesFilter = filter === 'all' || sk === filter
+          const nodeOpacity = matchesFilter ? 1 : 0.18
 
+          const color = isAct ? cfg.ringActive : cfg.ring
           const r = isSel ? 30 : isHov ? 26 : 21
 
           return (
             <g
               key={n.skill_id}
-              style={{ cursor: 'pointer' }}
+              style={{ cursor: 'pointer', opacity: nodeOpacity, transition: 'opacity 0.3s ease' }}
               onClick={() => onSelect(n.skill_id)}
               onMouseEnter={() => setHovered(n.skill_id)}
               onMouseLeave={() => setHovered(null)}
@@ -275,9 +284,9 @@ function Constellation({ nodes, selected, onSelect }) {
                 <circle
                   cx={pos.x} cy={pos.y} r={r + 8}
                   fill="none"
-                  stroke={cfg.ring}
-                  strokeWidth={1}
-                  opacity={0.3}
+                  stroke={color}
+                  strokeWidth={1.2}
+                  opacity={0.45}
                 />
               )}
 
@@ -293,10 +302,10 @@ function Constellation({ nodes, selected, onSelect }) {
               {/* Main circle */}
               <circle
                 cx={pos.x} cy={pos.y} r={r}
-                fill={isAct ? `${cfg.ring}22` : 'rgba(10,10,20,0.85)'}
-                stroke={cfg.ring}
+                fill={isAct ? `${color}22` : 'rgba(10,10,20,0.85)'}
+                stroke={color}
                 strokeWidth={isSel ? 2.5 : 1.5}
-                style={{ transition: 'r 0.2s ease, fill 0.2s ease, stroke-width 0.2s ease' }}
+                style={{ transition: 'r 0.2s ease, fill 0.2s ease, stroke 0.2s ease, stroke-width 0.2s ease' }}
               />
 
               {/* Mastery fill arc */}
@@ -304,7 +313,7 @@ function Constellation({ nodes, selected, onSelect }) {
                 <circle
                   cx={pos.x} cy={pos.y} r={r - 4}
                   fill="none"
-                  stroke={cfg.ring}
+                  stroke={color}
                   strokeWidth={2.5}
                   strokeDasharray={2 * Math.PI * (r - 4)}
                   strokeDashoffset={2 * Math.PI * (r - 4) * (1 - (n.mastery_score ?? 0) / 100)}
@@ -314,11 +323,25 @@ function Constellation({ nodes, selected, onSelect }) {
                 />
               )}
 
-              {/* Center dot */}
-              <circle cx={pos.x} cy={pos.y} r={isSel ? 5 : 4}
-                fill={sk === 'not-started' ? 'rgba(255,255,255,0.25)' : cfg.ring}
-                style={{ transition: 'r 0.2s ease' }}
-              />
+              {/* Center content: mastery % or dot */}
+              {(n.mastery_score ?? 0) > 0 && isAct ? (
+                <text
+                  x={pos.x} y={pos.y + 4}
+                  textAnchor="middle"
+                  fontSize={isSel ? 11 : 9}
+                  fontWeight="800"
+                  fill={color}
+                  fontFamily="var(--font-display)"
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}
+                >
+                  {n.mastery_score}%
+                </text>
+              ) : (
+                <circle cx={pos.x} cy={pos.y} r={isSel ? 5 : 4}
+                  fill={isAct ? color : (sk === 'not-started' ? 'rgba(255,255,255,0.25)' : cfg.ring)}
+                  style={{ transition: 'r 0.2s ease, fill 0.2s ease' }}
+                />
+              )}
 
               {/* Topic name label */}
               <text
@@ -327,11 +350,11 @@ function Constellation({ nodes, selected, onSelect }) {
                 textAnchor="middle"
                 fontSize={isAct ? 11.5 : 10}
                 fontWeight={isAct ? '700' : '500'}
-                fill={isAct ? cfg.ring : 'rgba(255,255,255,0.5)'}
+                fill={isAct ? color : 'rgba(255,255,255,0.5)'}
                 fontFamily="var(--font-display)"
                 style={{ transition: 'font-size 0.15s ease, fill 0.2s ease', pointerEvents: 'none', userSelect: 'none' }}
               >
-                {topic?.name.replace(' & ', ' & ').split(' ').slice(0, 2).join(' ')}
+                {topic?.name}
               </text>
             </g>
           )
@@ -368,7 +391,10 @@ function SkillMapSkeleton() {
 function OverallBar({ nodes }) {
   const mastered   = nodes.filter(n => n.status === 'Mastered').length
   const inProgress = nodes.filter(n => n.status === 'In progress').length
-  const pct = Math.round(nodes.reduce((s, n) => s + (n.mastery_score ?? 0), 0) / (nodes.length || 1))
+  const attempted  = nodes.filter(n => n.status !== 'Not started')
+  const pct = attempted.length
+    ? Math.round(attempted.reduce((s, n) => s + (n.mastery_score ?? 0), 0) / attempted.length)
+    : 0
 
   return (
     <div style={{
@@ -380,7 +406,7 @@ function OverallBar({ nodes }) {
       <div style={{ flex: 1, minWidth: 160 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
           <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--primary-text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Overall mastery</span>
-          <span style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 800, color: 'var(--accent-main)' }}>{pct}%</span>
+          <span style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 800, color: 'var(--accent-main)' }}>{pct > 0 ? `${pct}%` : '—'}</span>
         </div>
         <div style={{ height: 5, borderRadius: 99, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
           <div style={{ height: '100%', borderRadius: 99, width: `${pct}%`, background: 'linear-gradient(90deg, #6366f1, #34d399)', transition: 'width 1s ease' }} />
@@ -403,12 +429,20 @@ function OverallBar({ nodes }) {
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
+const FILTER_TABS = [
+  { key: 'all',          label: 'All' },
+  { key: 'in-progress',  label: 'In Progress' },
+  { key: 'mastered',     label: 'Mastered' },
+  { key: 'not-started',  label: 'Not Started' },
+]
+
 export default function SkillMap() {
   const navigate = useNavigate()
   const userId   = useUserId()
   const [nodes,    setNodes]    = useState([])
   const [loading,  setLoading]  = useState(true)
   const [selected, setSelected] = useState(null)
+  const [filter,   setFilter]   = useState('all')
   const [mobile,   setMobile]   = useState(() => window.innerWidth < 768)
 
   useEffect(() => {
@@ -420,19 +454,21 @@ export default function SkillMap() {
   useEffect(() => {
     track(EVENTS.SKILL_MAP_OPENED)
     setLoading(true)
-    fetch(`/api/progress/${userId}`)
-      .then(r => { if (!r.ok) throw new Error('API unavailable'); return r.json() })
-      .then(d => {
-        const data = Array.isArray(d) ? d : MOCK_PROGRESS
+    const minDelay = new Promise(r => setTimeout(r, 600))
+    Promise.all([
+      fetch(`/api/progress/${userId}`)
+        .then(r => { if (!r.ok) throw new Error('API unavailable'); return r.json() }),
+      minDelay,
+    ])
+      .then(([d]) => {
+        const data = Array.isArray(d) ? d : []
         setNodes(data)
         const first = data.find(n => n.status === 'In progress') || data[0]
         if (first) setSelected(first.skill_id)
         setLoading(false)
       })
       .catch(() => {
-        setNodes(MOCK_PROGRESS)
-        const first = MOCK_PROGRESS.find(n => n.status === 'In progress') || MOCK_PROGRESS[0]
-        if (first) setSelected(first.skill_id)
+        setNodes([])
         setLoading(false)
       })
   }, [userId])
@@ -447,15 +483,44 @@ export default function SkillMap() {
 
       {/* ── Header ── */}
       <div>
-        <h1 className="text-h1" style={{ margin: '0 0 4px' }}>Skill Map</h1>
-        <p className="text-body-small" style={{ margin: 0 }}>
-          Click a node to explore the topic. Connected lines show how concepts relate.
+        <h1 style={{
+          fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800,
+          margin: '0 0 6px', letterSpacing: '-0.02em',
+        }}>
+          Skill Map
+        </h1>
+        <p style={{ color: 'var(--primary-text-muted)', fontSize: 14, margin: 0, lineHeight: 1.5 }}>
+          Tap any node to explore a topic. Lines show how concepts connect.
         </p>
       </div>
 
       {loading ? <SkillMapSkeleton /> : (
         <>
           <OverallBar nodes={nodes} />
+
+          {/* ── Filter tabs ── */}
+          <div style={{
+            display: 'flex', gap: 4,
+            background: 'var(--bg-card)', border: '1px solid var(--border-light)',
+            borderRadius: 14, padding: 4, alignSelf: 'flex-start',
+          }}>
+            {FILTER_TABS.map(({ key, label }) => (
+              <button
+                key={key} type="button"
+                onClick={() => setFilter(key)}
+                style={{
+                  padding: '8px 18px', borderRadius: 10,
+                  fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer',
+                  background: filter === key ? 'var(--gradient-accent)' : 'transparent',
+                  color: filter === key ? '#fff' : 'var(--primary-text-muted)',
+                  boxShadow: filter === key ? '0 2px 8px rgba(99,102,241,0.35)' : 'none',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
           {/* ── Constellation + Detail ── */}
           <div style={{
@@ -474,6 +539,7 @@ export default function SkillMap() {
               <Constellation
                 nodes={nodes}
                 selected={selected}
+                filter={filter}
                 onSelect={(id) => {
                   setSelected(id)
                   track(EVENTS.TOPIC_SELECTED, { topic: id })

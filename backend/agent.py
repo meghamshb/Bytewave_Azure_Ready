@@ -2,25 +2,25 @@ import json
 import logging
 import os
 import time
-from openai import OpenAI, APIError, RateLimitError, APIConnectionError
+from pathlib import Path
+import anthropic
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
 load_dotenv(override=True)
 
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
-if not DEEPSEEK_API_KEY:
-    raise ValueError("DEEPSEEK_API_KEY environment variable is missing. Get one from https://platform.deepseek.com")
+if not ANTHROPIC_API_KEY:
+    raise ValueError("ANTHROPIC_API_KEY environment variable is missing. Get one from https://console.anthropic.com")
 
-client = OpenAI(
-    api_key=DEEPSEEK_API_KEY,
-    base_url="https://api.deepseek.com",
+client = anthropic.Anthropic(
+    api_key=ANTHROPIC_API_KEY,
     timeout=120.0,
 )
-MODEL_NAME = "deepseek-chat"
-CODE_MODEL = "deepseek-reasoner"   # R1 model: slower but much better at code, fewer retries
+MODEL_NAME = "claude-sonnet-4-6"   # Latest balanced model: planning, chat, scene generation
+CODE_MODEL = "claude-opus-4-6"    # Latest flagship model: Manim code generation & self-correction
 
 # Limit plan/code length to avoid token overflow and abuse
 MAX_QUESTION_LENGTH = 4000
@@ -52,6 +52,83 @@ class PhysicsAnimation(Scene):
     def construct(self):
 '''
 
+# ── Voiceover (Coqui XTTS v2 + 3Blue1Brown voice clone) ─────────────────────
+_ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+_VOICE_WAV = _ASSETS_DIR / "3b1b_voice.wav"
+
+try:
+    import manim_voiceover as _mv  # noqa
+    _MANIM_VOICEOVER_AVAILABLE = True
+except ImportError:
+    _MANIM_VOICEOVER_AVAILABLE = False
+
+# Voiceover is enabled only when BOTH the library and the reference WAV exist.
+VOICEOVER_ENABLED = _MANIM_VOICEOVER_AVAILABLE and _VOICE_WAV.exists()
+
+if VOICEOVER_ENABLED:
+    logger.info("Voiceover enabled: using %s", _VOICE_WAV)
+else:
+    logger.info(
+        "Voiceover disabled (library=%s, voice_wav=%s). "
+        "See backend/assets/VOICE_SETUP.md to enable.",
+        _MANIM_VOICEOVER_AVAILABLE, _VOICE_WAV.exists()
+    )
+
+_VOICEOVER_SKELETON_TEMPLATE = """\
+from manim import *
+import math
+import numpy as np
+from manim_voiceover import VoiceoverScene
+from manim_voiceover.services.coqui import CoquiService
+try:
+    from manim_physics import *
+except ImportError:
+    pass
+try:
+    import pymunk
+except ImportError:
+    pymunk = None
+try:
+    from scipy.integrate import solve_ivp
+    import scipy.signal
+except ImportError:
+    solve_ivp = None
+
+
+class PhysicsAnimation(VoiceoverScene):
+    def construct(self):
+        self.set_speech_service(
+            CoquiService(
+                model_name="tts_models/multilingual/multi-dataset/xtts_v2",
+                speaker_wav=r"{voice_wav}",
+                language="en",
+            )
+        )
+"""
+
+_VOICEOVER_PROMPT_HINT = """
+VOICEOVER NARRATION (REQUIRED when voiceover is active):
+- Wrap EVERY self.play() or self.wait() inside a `with self.voiceover("...") as tracker:` block.
+- Write narration in the style of 3Blue1Brown (Grant Sanderson): conversational, intuition-first, curious tone.
+- Use phrases like: "Think of it this way...", "Notice what happens here...", "But here's the key insight...", "What we're really asking is...", "And here's where it gets interesting..."
+- Each voiceover block: 1-3 natural spoken sentences. Keep it concise and clear.
+- Sync animation to audio: use `run_time=tracker.duration` on the self.play() call.
+- NEVER call self.set_speech_service() — it is already configured in the skeleton.
+- Example structure:
+    with self.voiceover("Let's start by thinking about what this force actually means.") as tracker:
+        self.play(Create(arrow), run_time=tracker.duration)
+    with self.voiceover("Notice how as the angle increases, the horizontal component shrinks while the vertical one grows.") as tracker:
+        self.play(angle_tracker.animate.set_value(60), run_time=tracker.duration)
+"""
+
+
+def _get_manim_skeleton() -> str:
+    """Return the appropriate Manim script skeleton based on voiceover availability."""
+    if not VOICEOVER_ENABLED:
+        return MANIM_SKELETON
+    return _VOICEOVER_SKELETON_TEMPLATE.format(voice_wav=str(_VOICE_WAV))
+
+
 # ── Dangerous patterns to reject before sending to LLM ──────────────────────
 _INJECTION_PATTERNS = [
     "ignore previous", "ignore all previous", "you are now", "forget your",
@@ -77,61 +154,38 @@ def sanitize_question(text: str) -> str:
 
 
 def _call_llm(messages: list[dict], model: str = MODEL_NAME, max_retries: int = 3) -> str:
-    """Call the LLM with exponential backoff on transient errors.
+    """Call the Claude API with exponential backoff on transient errors.
 
-    deepseek-reasoner does not support system messages, so we fold them
-    into the first user message automatically.
+    Claude accepts system messages as a top-level parameter, so we extract
+    any system-role entries from the messages list and pass them separately.
     """
-    if model == CODE_MODEL and model != MODEL_NAME:
-        messages = _adapt_messages_for_reasoner(messages)
+    system_parts = [m["content"] for m in messages if m.get("role") == "system"]
+    user_messages = [m for m in messages if m.get("role") != "system"]
+    system_text = "\n\n".join(system_parts) if system_parts else None
+
+    # Claude requires max_tokens; use a larger budget for code generation
+    max_tokens = 8192 if model == CODE_MODEL else 4096
 
     last_error = None
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
-                messages=messages,
-                model=model,
-            )
-            content = (response.choices[0].message.content or "").strip()
-            if not content:
-                # deepseek-reasoner may put output in reasoning_content
-                rc = getattr(response.choices[0].message, "reasoning_content", None)
-                if rc:
-                    logger.info("Using reasoning_content as fallback (%d chars)", len(rc))
-                    content = rc.strip()
+            kwargs: dict = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "messages": user_messages,
+            }
+            if system_text:
+                kwargs["system"] = system_text
+
+            response = client.messages.create(**kwargs)
+            content = (response.content[0].text or "").strip()
             return content
-        except (RateLimitError, APIConnectionError, APIError) as e:
+        except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.APIStatusError) as e:
             last_error = e
             wait = 2 ** attempt
             logger.warning("LLM call attempt %d failed (%s), retrying in %ds...", attempt + 1, type(e).__name__, wait)
             time.sleep(wait)
     raise last_error  # type: ignore[misc]
-
-
-def _adapt_messages_for_reasoner(messages: list[dict]) -> list[dict]:
-    """Merge system messages into the first user message for deepseek-reasoner."""
-    system_parts = []
-    other_messages = []
-    for msg in messages:
-        if msg.get("role") == "system":
-            system_parts.append(msg.get("content", ""))
-        else:
-            other_messages.append(msg)
-
-    if not system_parts:
-        return other_messages
-
-    system_text = "\n".join(system_parts)
-
-    if other_messages and other_messages[0].get("role") == "user":
-        other_messages[0] = {
-            "role": "user",
-            "content": f"[Instructions: {system_text}]\n\n{other_messages[0].get('content', '')}",
-        }
-    else:
-        other_messages.insert(0, {"role": "user", "content": system_text})
-
-    return other_messages
 
 
 def _truncate_plan_to_word_limit(plan: str, max_words: int = MAX_PLAN_WORDS) -> str:
@@ -230,9 +284,13 @@ def _clean_construct_body(raw: str) -> str:
         # Strip out class/def/import lines the LLM might include despite instructions
         if stripped.startswith("from manim import") or stripped.startswith("import manim"):
             continue
+        if stripped.startswith("from manim_voiceover") or stripped.startswith("import manim_voiceover"):
+            continue
         if stripped.startswith("class ") and "Scene" in stripped:
             continue
         if stripped.startswith("def construct(self"):
+            continue
+        if stripped.startswith("self.set_speech_service("):
             continue
         kept.append(line)
     if not kept:
@@ -745,6 +803,7 @@ _TEMPLATE_KEYWORDS: list[tuple[list[str], str]] = [
     (["electric field", "coulomb", "point charge", "electrostatic"], "electric"),
     (["magnetic field", "lorentz", "ampere", "solenoid", "electromagnet", "faraday"], "magnetic"),
     (["optic", "refract", "reflect", "snell", "lens", "light ray", "total internal"], "optics"),
+    (["free fall", "freefall", "falling body", "falling object", "falling ball", "dropped from", "ball drop", "free-fall"], "freefall"),
     (["gravity", "gravitational", "kepler", "orbital", "satellite", "escape velocity"], "gravity"),
     (["thermo", "ideal gas", "kinetic theory", "carnot", "heat", "gas law", "pv diagram"], "thermo"),
     # Extended domains
@@ -905,7 +964,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
             + _post_anim +
             f"        self.wait(0.5)\n"
         )
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Spring / Hooke's law / SHM ───────────────────────────────────────────
     if any(k in q for k in ("spring", "hooke", "shm", "simple harmonic", "oscillat")):
@@ -963,7 +1022,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(x_tracker.animate.set_value(x_data[len(x_data)//2]), run_time={round(min(5.0, _t_end)/2, 2)}, rate_func=linear)
         self.play(x_tracker.animate.set_value(x_data[-1]), run_time={round(min(5.0, _t_end)/2, 2)}, rate_func=linear)
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     if any(k in q for k in ("projectile", "parabola", "launch", "trajectory")):
         import math as _math
@@ -1015,7 +1074,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.add(dot, vx_arrow, vy_arrow, g_arrow)
         self.play(MoveAlongPath(dot, path), vy_cur.animate.set_value(-vy0), run_time=2, rate_func=linear)
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     if any(k in q for k in ("pendulum", "double pendulum", "simple pendulum")) and "wave" not in q:
         import math as _math
@@ -1076,7 +1135,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
             for sgn in [1,-1,0.6,-0.5,0]:
                 self.play(theta_vt.animate.set_value(sgn*{round(_theta0,3)}), run_time=1.0, rate_func=there_and_back if sgn==0 else linear)
         self.wait(1)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Circular motion / centripetal force ──────────────────────────────────
     if any(k in q for k in ("circular motion", "centripetal", "centrifugal",
@@ -1121,7 +1180,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(angle.animate.set_value(2 * PI), run_time=_T if {_T} < 6 else 6, rate_func=linear)
         self.play(angle.animate.set_value(4 * PI), run_time=_T if {_T} < 6 else 6, rate_func=linear)
         self.wait(1)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     if any(k in q for k in ("wave", "interference", "sound", "light wave")):
         _A      = params.get("A", 1.2)
@@ -1151,7 +1210,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.add(wave)
         self.play(phase.animate.set_value({round(_cycles * 2 * 3.14159, 2)}), run_time={round(_run, 1)}, rate_func=linear)
         self.wait(1)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     if any(k in q for k in ("force", "newton", "friction", "block")):
         _m_mass  = float(params.get("m_mass", 1.0))
@@ -1219,7 +1278,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
             f"        self.play(block.animate.shift(RIGHT * 4), run_time=1.8, rate_func=linear)\n"
             f"        self.wait(0.5)"
         )
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Electric field / Coulomb / charge ───────────────────────────────────
     if any(k in q for k in ("electric field", "electric force", "coulomb", "charge",
@@ -1261,7 +1320,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(Create(between))
         self.play(Write(F_lbl), Write(coulomb))
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Magnetic field / Lorentz force ───────────────────────────────────────
     if any(k in q for k in ("magnetic field", "magnetic force", "lorentz", "ampere",
@@ -1290,7 +1349,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(Create(b_arrows))
         self.play(Write(eq_B), Write(eq_F), Write(mu_lbl))
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Optics: Snell's law / refraction / reflection ────────────────────────
     if any(k in q for k in ("optic", "refract", "reflect", "snell", "lens",
@@ -1338,7 +1397,60 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(Create(refracted), Create(arc_refrac), Write(lbl_tr))
         self.play(Write(snell_eq), Write(snell_vals))
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
+
+    # ── Free fall ─────────────────────────────────────────────────────────────
+    if any(k in q for k in ("free fall", "freefall", "falling body", "falling object",
+                             "falling ball", "dropped from", "drop from", "ball drop",
+                             "object drop", "free-fall")):
+        import math as _math
+        _g  = params.get("g", 9.8)
+        _h  = params.get("h", params.get("H", 5.0))
+        _t_fall   = round(_math.sqrt(2 * _h / _g), 2) if _g > 0 else 1.0
+        _v_final  = round(_g * _t_fall, 1)
+        body = f"""        import math
+        g_val  = {_g}
+        h_val  = {_h}
+        t_fall = {_t_fall}
+        title = Text("{title}", font_size=28).to_edge(UP)
+        ground = Line(LEFT * 4.5, RIGHT * 4.5, color=GREY, stroke_width=3).shift(DOWN * 2.8)
+        ground_lbl = Text("Ground (h = 0)", font_size=18, color=GREY).next_to(ground, DOWN, buff=0.1)
+        start_line = DashedLine(LEFT * 0.6, RIGHT * 0.6, color=YELLOW, stroke_width=1.5).shift(UP * 2.5)
+        h_brace_lbl = MathTex(r"h = {_h}\\,m", font_size=22, color=YELLOW).shift(LEFT * 1.8 + UP * 0.5)
+        t = ValueTracker(0)
+        ball = always_redraw(lambda: Dot(
+            UP * (2.5 - 0.5 * g_val * min(t.get_value(), t_fall) ** 2),
+            color=BLUE, radius=0.2
+        ))
+        vel_arrow = always_redraw(lambda: Arrow(
+            ball.get_center(),
+            ball.get_center() + DOWN * min(g_val * t.get_value() * 0.2, 2.5),
+            color=GREEN, buff=0, stroke_width=3.5,
+            max_tip_length_to_length_ratio=0.22
+        ) if t.get_value() > 0.05 else VGroup())
+        vel_lbl = always_redraw(lambda: MathTex(
+            r"v = " + f"{g_val * min(t.get_value(), t_fall):.1f}" + r"\\;m/s",
+            font_size=22, color=GREEN
+        ).to_corner(UL).shift(DOWN * 0.5 + RIGHT * 0.2))
+        pos_lbl = always_redraw(lambda: MathTex(
+            r"y = " + f"{0.5 * g_val * min(t.get_value(), t_fall) ** 2:.2f}" + r"\\;m",
+            font_size=22, color=YELLOW
+        ).to_corner(UL).shift(DOWN * 1.1 + RIGHT * 0.2))
+        eq_v   = MathTex(r"v = g\\,t", font_size=28, color=GREEN).to_corner(UR).shift(DOWN * 0.7 + LEFT * 0.2)
+        eq_y   = MathTex(r"y = \\tfrac{{1}}{{2}}g\\,t^2", font_size=28, color=YELLOW).to_corner(UR).shift(DOWN * 1.45 + LEFT * 0.2)
+        eq_g   = MathTex(r"g = {_g}\\;m/s^2", font_size=24, color=RED).to_corner(UR).shift(DOWN * 2.2 + LEFT * 0.2)
+        g_arrow = Arrow(UP * 0.6 + RIGHT * 2.5, DOWN * 0.3 + RIGHT * 2.5, color=RED, buff=0, stroke_width=3)
+        g_label = MathTex(r"g", font_size=26, color=RED).next_to(g_arrow, RIGHT, buff=0.12)
+        self.play(Write(title))
+        self.play(Create(ground), Write(ground_lbl))
+        self.play(Create(start_line), Write(h_brace_lbl))
+        self.play(FadeIn(ball))
+        self.play(Write(eq_v), Write(eq_y), Write(eq_g))
+        self.play(Create(g_arrow), Write(g_label))
+        self.add(vel_arrow, vel_lbl, pos_lbl)
+        self.play(t.animate.set_value(t_fall), run_time=3.5, rate_func=linear)
+        self.wait(1.0)"""
+        return _get_manim_skeleton() + body
 
     # ── Gravity / Kepler / orbital mechanics ─────────────────────────────────
     if any(k in q for k in ("gravity", "gravitational", "kepler", "orbital",
@@ -1381,7 +1493,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(angle.animate.set_value(2 * PI), run_time=3.5, rate_func=linear)
         self.play(angle.animate.set_value(4 * PI), run_time=3.5, rate_func=linear)
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Thermodynamics / ideal gas / kinetic theory ──────────────────────────
     if any(k in q for k in ("thermo", "ideal gas", "kinetic theory", "entropy",
@@ -1430,7 +1542,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
                 anims.append(p.animate.move_to([nx, ny, 0]))
             self.play(*anims, run_time=0.12, rate_func=linear)
         self.wait(1)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Fluid / Buoyancy / Archimedes ───────────────────────────────────────
     if any(k in q for k in ("buoyan", "archimedes", "fluid", "bernoulli",
@@ -1466,7 +1578,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(Create(w_arrow), Write(w_lbl))
         self.play(Write(arch_eq), Write(net_lbl))
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Rotational mechanics / Torque / Angular momentum ─────────────────────
     if any(k in q for k in ("torque", "moment of inertia", "angular momentum",
@@ -1511,7 +1623,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(angle.animate.set_value(2 * PI), run_time=2 * PI / {max(_om, 0.1):.2f}, rate_func=linear)
         self.play(angle.animate.set_value(4 * PI), run_time=2 * PI / {max(_om, 0.1):.2f}, rate_func=linear)
         self.wait(1)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Electric circuit / RC / Ohm's law ────────────────────────────────────
     if any(k in q for k in ("circuit", "ohm", "kirchhoff", "rc circuit", "rlc",
@@ -1552,7 +1664,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(Create(tau_line), Write(tau_lbl))
         self.play(Write(eq_charge), Write(R_lbl))
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Doppler effect / moving source ───────────────────────────────────────
     if any(k in q for k in ("doppler", "doppler effect", "frequency shift",
@@ -1592,7 +1704,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(Write(f_eq), Write(f_ahead_lbl), Write(f_behind_lbl), Write(f0_lbl))
         self.play(source.animate.shift(RIGHT * 4), v_arrow.animate.shift(RIGHT * 4), run_time=2.5, rate_func=linear)
         self.wait(1)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Quantum mechanics / particle in a box / wave function ─────────────────
     if any(k in q for k in ("quantum", "wave function", "schrodinger", "uncertainty principle",
@@ -1629,7 +1741,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(Write(psi_lbl), Write(E_lbl))
         self.play(Write(uncert_lbl), Write(prob_lbl))
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Nuclear / Radioactive decay ───────────────────────────────────────────
     if any(k in q for k in ("nuclear", "radioactive", "radioactivity",
@@ -1667,7 +1779,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(Create(half_h), Create(half_v), Write(half_lbl))
         self.play(Write(eq_decay), Write(lam_lbl), Write(N0_lbl))
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Young's double slit / diffraction ────────────────────────────────────
     if any(k in q for k in ("double slit", "young's", "diffract", "fringe pattern",
@@ -1711,7 +1823,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(Create(fringes, run_time=2))
         self.play(Write(eq), Write(lam_lbl), Write(fringe_lbl))
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Special relativity / Time dilation / Lorentz ─────────────────────────
     if any(k in q for k in ("relativity", "time dilation", "lorentz factor",
@@ -1747,7 +1859,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(Write(eq_gamma), Write(eq_dil), Write(eq_len))
         self.play(Write(gamma_val_lbl))
         self.wait(0.5)"""
-        return MANIM_SKELETON + body
+        return _get_manim_skeleton() + body
 
     # ── Generic fallback ─────────────────────────────────────────────────────
     body = f"""        title = Text("{title}", font_size=32).to_edge(UP)
@@ -1763,7 +1875,7 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.play(Write(eq), Write(note))
         self.play(left.animate.shift(RIGHT * 2), right.animate.shift(LEFT * 2), run_time=2)
         self.wait(1)"""
-    return MANIM_SKELETON + body
+    return _get_manim_skeleton() + body
 
 
 def _build_few_shot_section(question: str) -> str:
@@ -1788,42 +1900,43 @@ def _build_few_shot_section(question: str) -> str:
 def _enforce_params_in_body(body: str, params: dict) -> str:
     """
     Post-process LLM-generated body to remove hardcoded values that shadow the
-    preamble variables. For each extracted param, strip any line where the LLM
-    reassigns the variable to a different (wrong) value. The preamble already
-    defines the correct value at the top, so duplicate definitions with wrong
-    values would shadow it.
+    preamble variables.
+
+    IMPORTANT: Only strips TOP-LEVEL assignments (8-space base indent). Removing
+    a variable assignment that is inside a nested block (12+ spaces) would break
+    the block structure and cause SyntaxErrors (e.g. 'unexpected indent').
 
     Also fixes the common LLM habit of writing math.radians(45) when theta0=30.
     """
     import re as _re
 
+    BASE_INDENT = 8  # the normalised body always has 8-space top-level indent
+
     lines = body.split("\n")
     out = []
     for line in lines:
-        stripped = line.strip()
+        if not line.strip():
+            out.append(line)
+            continue
+
         skip = False
-        for var, val in params.items():
-            # Remove lines like `theta0 = 45`, `v0=7.0`, `k = 10` etc. where the
-            # LLM redefined the variable with a DIFFERENT value than what the user specified.
-            # Pattern: optional whitespace, var name, optional whitespace, =, optional whitespace, number
-            m = _re.match(
-                rf"^(\s*){_re.escape(var)}\s*=\s*([-+]?\d*\.?\d+)\s*$",
-                line
-            )
-            if m:
-                existing_val = float(m.group(2))
-                # If it's a different value, drop this line (preamble has the right one)
-                if abs(existing_val - float(val)) > 1e-9:
+        current_indent = len(line) - len(line.lstrip())
+
+        # Only enforce params on TOP-LEVEL lines (exactly BASE_INDENT spaces).
+        # Deeper lines are inside blocks — removing them would orphan the block.
+        if current_indent == BASE_INDENT:
+            for var, val in params.items():
+                m = _re.match(
+                    rf"^(\s*){_re.escape(var)}\s*=\s*([-+]?\d*\.?\d+)\s*$",
+                    line
+                )
+                if m:
                     skip = True
                     break
-                # If it's the same value, also drop it (preamble already defines it)
-                skip = True
-                break
 
         if not skip:
             # Fix math.radians(hardcoded_angle) when theta0 is in params
             if "theta0" in params and "math.radians(" in line:
-                # Replace math.radians(<any number>) with math.radians(theta0)
                 line = _re.sub(
                     r'math\.radians\(\s*[-+]?\d*\.?\d+\s*\)',
                     'math.radians(theta0)',
@@ -1984,16 +2097,31 @@ Output only code, no markdown, no backticks."""
             f"Reference the variable names directly (e.g. math.radians(theta0), not math.radians(45))."
         )
 
+    # Build a param-awareness hint for the system prompt
+    _param_no_redefine = ""
+    if params:
+        _param_no_redefine = (
+            f"\n\nPRE-DEFINED VARIABLES — DO NOT REDEFINE THESE AT ALL: "
+            + ", ".join(f"{k}={v}" for k, v in params.items())
+            + ". They are already defined at the very top of the method body. "
+            "Reference them directly by name. Never write them inside a nested block."
+        )
+
+    _voiceover_sys = _VOICEOVER_PROMPT_HINT if VOICEOVER_ENABLED else ""
     content = _call_llm(
         messages=[
             {"role": "system", "content": (
                 "You output ONLY the body of the Manim construct() method. "
-                "Code only, 4-space indent. Use MathTex for equations, always_redraw for force arrows on moving objects. "
+                "Code only. INDENTATION RULES (critical): use 4 spaces per indent level. "
+                "ALL top-level statements (variable definitions, self.play, self.add, etc.) "
+                "must be at 4-space indent — never wrap them in an outer if/with/for block. "
+                "Nested blocks inside loops/conditions use 8 spaces, 12 spaces, etc. "
+                "Use MathTex for equations, always_redraw for force arrows on moving objects. "
                 "OBEY physics conditions strictly: no friction = no friction arrow; elastic = e=1; frictionless = mu=0. "
                 "Available imports: manim (via `from manim import *`), numpy as np, "
                 "scipy (use `from scipy.integrate import solve_ivp` for ODEs), "
                 "pymunk (use `import pymunk` for rigid body). "
-                + param_names_hint
+                + param_names_hint + _param_no_redefine + _voiceover_sys
             )},
             {"role": "user", "content": prompt}
         ],
@@ -2013,21 +2141,43 @@ Output only code, no markdown, no backticks."""
 
     # Final safety: ensure the combined code is syntactically valid
     import ast as _ast
-    full_src = MANIM_SKELETON + body
+    full_src = _get_manim_skeleton() + body
     try:
         _ast.parse(full_src)
     except SyntaxError as se:
-        import logging as _logging
-        _logging.getLogger(__name__).warning(
-            "Post-preamble SyntaxError (%s), reclean body without params", se
-        )
-        body = _clean_construct_body(content)
-        if params:
-            body = _enforce_params_in_body(body, params)
-            body = _params_preamble(params) + "\n" + body
-        body = _sanitize_undefined_physics_vars(body)
+        logger.warning("Post-preamble SyntaxError (%s), asking Claude to fix it", se)
+        # Ask Claude to rewrite the broken code instead of repeating the same steps
+        try:
+            fixed_content = _call_llm(
+                messages=[
+                    {"role": "system", "content": (
+                        "You output ONLY the body of the Manim construct() method. "
+                        "Code only, 4-space indent per level. ALL top-level statements "
+                        "must be at exactly 4 spaces (they will be placed inside a method). "
+                        "Do NOT wrap code in an outer block. Do NOT define variables that "
+                        "are pre-defined: " + ", ".join(f"{k}={v}" for k, v in params.items()) + ". "
+                        "Fix the indentation so the code is valid Python."
+                    ) if params else (
+                        "You output ONLY the body of the Manim construct() method. "
+                        "Code only, 4-space indent per level. Fix any indentation errors."
+                    )},
+                    {"role": "user", "content": (
+                        f"The following construct() body has a SyntaxError: {se}\n"
+                        f"Rewrite it correctly:\n{content}"
+                    )},
+                ],
+                model=CODE_MODEL,
+            )
+            body = _clean_construct_body(fixed_content)
+            if params:
+                body = _enforce_params_in_body(body, params)
+                body = _params_preamble(params) + "\n" + body
+            body = _sanitize_undefined_physics_vars(body)
+            logger.info("Claude SyntaxError fix succeeded")
+        except Exception as fix_err:
+            logger.warning("Claude SyntaxError fix failed (%s), using raw body", fix_err)
 
-    return MANIM_SKELETON + body
+    return _get_manim_skeleton() + body
 
 
 def generate_plan_and_code(question: str) -> tuple[str, str]:
@@ -2091,12 +2241,21 @@ Physics code rules:
             f"(e.g. math.radians(theta0) not math.radians(45))."
         )
 
+    _no_redefine_hint = ""
+    if params:
+        _no_redefine_hint = (
+            f" PRE-DEFINED (DO NOT redefine or put inside any block): "
+            + ", ".join(f"{k}={v}" for k, v in params.items()) + "."
+        )
+
+    _voiceover_sys = _VOICEOVER_PROMPT_HINT if VOICEOVER_ENABLED else ""
     raw = _call_llm(
         messages=[
             {"role": "system", "content": (
                 "You output ONLY valid compact JSON with keys 'plan' (string) and 'code' (string). "
                 "The 'code' value is construct() body only, 4-space indented Python. "
-                "No markdown. No prose outside JSON." + param_hint
+                "INDENTATION: ALL top-level statements at 4 spaces; never wrap in an outer block. "
+                "No markdown. No prose outside JSON." + param_hint + _no_redefine_hint + _voiceover_sys
             )},
             {"role": "user", "content": prompt},
         ],
@@ -2133,7 +2292,7 @@ Physics code rules:
         body = _params_preamble(params) + "\n" + body
     body = _sanitize_undefined_physics_vars(body)
 
-    full_src = MANIM_SKELETON + body
+    full_src = _get_manim_skeleton() + body
     import ast as _ast
     try:
         _ast.parse(full_src)
@@ -2196,16 +2355,17 @@ No class, no imports, no explanation.
 - Available: `from manim import *`, `import numpy as np`, `from scipy.integrate import solve_ivp` (for ODEs), `import pymunk` (for rigid body).
 - Use standard Manim CE objects only: Axes, Line, Arrow, Arc, Dot, Circle, Rectangle, DashedLine, Text, MathTex, VGroup, ValueTracker, always_redraw, np, math.
 - Do NOT use Spring, Wall, or any object not listed above."""
+        _voiceover_sys = _VOICEOVER_PROMPT_HINT if VOICEOVER_ENABLED else ""
         content = _call_llm(
             messages=[
-                {"role": "system", "content": "You output only the fixed construct() method body. Code only."},
+                {"role": "system", "content": "You output only the fixed construct() method body. Code only." + _voiceover_sys},
                 {"role": "user", "content": prompt}
             ],
             model=CODE_MODEL,
         )
         if content:
             body = _clean_construct_body(content)
-            return MANIM_SKELETON + body
+            return _get_manim_skeleton() + body
 
     # Fallback: ask for full code, clean, then try to use body or full cleaned code
     prompt = f"""Plan: {plan}
@@ -2235,7 +2395,7 @@ Available libraries: scipy (from scipy.integrate import solve_ivp), pymunk, matp
     full = _clean_python_code(content)
     body = _extract_construct_body(full)
     if body:
-        return MANIM_SKELETON + _clean_construct_body(body)
+        return _get_manim_skeleton() + _clean_construct_body(body)
     return full
 
 
@@ -2480,6 +2640,53 @@ def _clean_python_code(code: str | None) -> str:
 
 # ── Interactive Physics Simulator (Matter.js scene generation) ──────────────
 
+# Map scene labels → builder functions (populated after the builders are defined below)
+_SCENE_DISPATCH: dict = {}   # filled at module end via _register_scene_builders()
+
+_VALID_SCENES = frozenset([
+    "force", "collision", "pendulum", "projectile",
+    "spring", "incline", "freefall", "pulley", "circular",
+])
+
+
+def _llm_classify_scene(question: str) -> str:
+    """
+    Ask Claude (Anthropic) to classify the physics question into one of the
+    supported interactive-simulation scenarios.
+    Returns a scene label string or 'unsupported'.
+    Uses the fast MODEL_NAME (haiku) for minimal latency.
+    """
+    try:
+        raw = _call_llm(
+            messages=[
+                {"role": "system", "content": (
+                    "You are a physics simulation classifier. "
+                    "Given a physics question, output ONLY the single best-matching scenario name — nothing else. "
+                    "Scenarios:\n"
+                    "  force      – block on surface, applied force, friction, Newton's 2nd law, F=ma\n"
+                    "  collision  – elastic/inelastic collision, momentum transfer, two balls hitting\n"
+                    "  pendulum   – simple pendulum, swinging bob, string pendulum\n"
+                    "  projectile – thrown or launched object, parabolic trajectory, cannon ball\n"
+                    "  spring     – spring-mass, Hooke's law, SHM, harmonic oscillator, coefficient of restitution bounce\n"
+                    "  incline    – block sliding on ramp or inclined plane, wedge\n"
+                    "  freefall   – object dropped, terminal velocity, free-fall, falling under gravity\n"
+                    "  pulley     – Atwood machine, two masses over a pulley\n"
+                    "  circular   – centripetal force, uniform circular motion, orbit, revolution\n"
+                    "  unsupported – waves, electric/magnetic fields, thermodynamics, optics, nuclear, circuits, anything else\n"
+                    "Output exactly one word from the list above."
+                )},
+                {"role": "user", "content": question},
+            ],
+            model=MODEL_NAME,
+            max_retries=1,
+        )
+        label = (raw or "").strip().lower().split()[0] if raw else "unsupported"
+        return label if label in _VALID_SCENES else "unsupported"
+    except Exception as exc:
+        logger.warning("LLM scene classification failed (%s), defaulting to unsupported", exc)
+        return "unsupported"
+
+
 def generate_matter_scene(question: str, params: dict | None = None) -> dict:
     """
     Generate a Matter.js interactive scene configuration for the given physics question.
@@ -2490,26 +2697,98 @@ def generate_matter_scene(question: str, params: dict | None = None) -> dict:
     q = question.lower()
 
     # Check more specific domains FIRST so "block on incline" isn't caught by the force check
-    if any(k in q for k in ("incline", "inclined", "ramp", "slope", "wedge")):
+    def _has(*keywords):
+        return any(k in q for k in keywords)
+
+    def _lacks(*keywords):
+        return not any(k in q for k in keywords)
+
+    # ── 1. Pulley / Atwood — before any "pull" check ────────────────────────
+    if _has("pulley", "atwood"):
+        return _matter_pulley(params, question)
+
+    # ── 2. Inclined plane ────────────────────────────────────────────────────
+    if _has("incline", "inclined", "ramp", "wedge"):
+        return _matter_incline(params, question)
+    # "slope" only when clearly about an inclined surface, not a graph
+    if "slope" in q and _has("block", "mass", "angle", "slide", "friction", "plane") and _lacks("graph", "velocity-time", "time graph", "position-time"):
         return _matter_incline(params, question)
 
-    if any(k in q for k in ("pendulum", "simple pendulum", "bob")) and "wave" not in q:
+    # ── 3. Pendulum ───────────────────────────────────────────────────────────
+    if _has("pendulum", "simple pendulum") and _lacks("wave"):
+        return _matter_pendulum(params, question)
+    # "bob" only in clear pendulum context, not as a proper noun
+    if "bob" in q and _has("swing", "string", "pivot", "pendulum", "oscillat", "angle"):
         return _matter_pendulum(params, question)
 
-    if any(k in q for k in ("spring", "hooke", "shm", "oscillat", "simple harmonic")):
+    # ── 4. Spring / SHM ───────────────────────────────────────────────────────
+    if _has("spring", "hooke", "shm", "simple harmonic"):
+        return _matter_spring(params, question)
+    if "oscillat" in q and _lacks("electric", "magnetic", "wave", "circuit", "lc"):
         return _matter_spring(params, question)
 
-    if any(k in q for k in ("collision", "collide", "elastic", "inelastic", "momentum", "billiard")):
+    # ── 5. Circular / centripetal motion ─────────────────────────────────────
+    if _has("centripetal", "centrifugal", "uniform circular"):
+        return _matter_circular(params, question)
+    if "circular" in q and _has("motion", "orbit", "force", "velocity", "speed", "acceleration"):
+        return _matter_circular(params, question)
+    if _has("orbit", "revolution") and _lacks("electron", "atomic", "bohr", "wave", "light"):
+        return _matter_circular(params, question)
+
+    # ── 6. Collision / momentum ───────────────────────────────────────────────
+    if _has("collision", "collide", "billiard"):
+        return _matter_collision(params, question)
+    if _has("elastic", "inelastic") and _has("ball", "mass", "object", "m1", "m2", "momentum", "velocity", "collision"):
+        return _matter_collision(params, question)
+    if "momentum" in q and _lacks("angular", "orbital") and _has("conserv", "ball", "mass", "object", "m1", "m2", "collision", "transfer"):
         return _matter_collision(params, question)
 
-    if any(k in q for k in ("projectile", "trajectory", "throw", "launch", "cannon")) and "collision" not in q:
+    # ── 7. Projectile motion ─────────────────────────────────────────────────
+    if _has("projectile", "trajectory", "cannon"):
+        return _matter_projectile(params, question)
+    if "throw" in q and _has("ball", "object", "mass", "angle", "velocity", "horizontal", "vertical", "air"):
+        return _matter_projectile(params, question)
+    if "launch" in q and _has("angle", "speed", "velocity", "ball", "object", "horizontal") and _lacks("rocket", "space", "satellite"):
         return _matter_projectile(params, question)
 
-    if any(k in q for k in ("force", "newton", "friction", "block", "push", "pull")) and "collision" not in q and "pendulum" not in q:
+    # ── 8. Applied force / Newton's 2nd law ──────────────────────────────────
+    # "newton" only when clearly F=ma, not Newton's law of cooling / gravitation
+    _newton_2nd = (
+        "newton" in q
+        and _lacks("cooling", "gravitation", "universal", "unit")
+        and _has("second", "2nd", "f=ma", "force", "acceleration", "mass")
+    )
+    if _has("friction") and _lacks("pendulum", "pulley", "collision", "orbital", "incline", "ramp", "slope"):
+        return _matter_force(params, question)
+    if _has("push", "applied force") and _lacks("pendulum", "pulley", "collision"):
+        return _matter_force(params, question)
+    if "pull" in q and _lacks("pulley", "pendulum", "collision"):
+        return _matter_force(params, question)
+    if "force" in q and _lacks("centripetal", "centrifugal", "magnetic", "electric", "lorentz", "buoyant", "nuclear", "gravitational force", "collision"):
+        return _matter_force(params, question)
+    if "block" in q and _lacks("diagram", "chain", "collision", "incline", "ramp", "slope", "pulley"):
+        return _matter_force(params, question)
+    if _newton_2nd:
         return _matter_force(params, question)
 
-    if any(k in q for k in ("free fall", "freefall", "falling", "drop", "gravity")) and "pendulum" not in q and "projectile" not in q:
+    # ── 9. Free fall ─────────────────────────────────────────────────────────
+    if _has("free fall", "freefall"):
         return _matter_freefall(params, question)
+    if "falling" in q and _lacks("pendulum", "projectile"):
+        return _matter_freefall(params, question)
+    # "drop" only in falling-object context, not electrical/thermal
+    if "drop" in q and _has("ball", "object", "mass", "height", "free", "gravity", "kg") and _lacks("voltage", "pressure", "temperature", "current", "potential"):
+        return _matter_freefall(params, question)
+    if "gravity" in q and _has("fall", "drop", "object", "mass", "terminal") and _lacks("wave", "assist", "potential energy", "orbital", "circular"):
+        return _matter_freefall(params, question)
+
+    # ── 10. LLM fallback — ask Claude when keyword matching is inconclusive ──
+    # This is what keeps the interactive in sync with the video (both use Anthropic).
+    label = _llm_classify_scene(question)
+    if label in _VALID_SCENES:
+        fn = _SCENE_DISPATCH.get(label)
+        if fn:
+            return fn(params, question)
 
     return {
         "supported": False,
@@ -2646,6 +2925,47 @@ def _matter_incline(params: dict, question: str) -> dict:
     }
 
 
+def _matter_circular(params: dict, question: str) -> dict:
+    import math as _m
+    r     = float(params.get("r", params.get("L", params.get("R", 1.5))))
+    v0    = float(params.get("v0", 4.0))
+    mass  = float(params.get("m_mass", params.get("mass", 1.0)))
+    omega = round(v0 / r, 2) if r > 0 else 0
+    T_per = round(2 * _m.pi * r / v0, 2) if v0 > 0 else 0
+    ac    = round(v0 ** 2 / r, 2) if r > 0 else 0
+    Fc    = round(mass * v0 ** 2 / r, 2) if r > 0 else 0
+    return {
+        "supported": True,
+        "domain": "circular",
+        "physics": {"scenario": "circular", "initialParams": {"r": r, "v0": v0, "mass": mass}},
+        "params": [
+            {"id": "r",    "label": "Radius",  "value": r,    "min": 0.5, "max": 4,  "step": 0.25, "unit": "m"},
+            {"id": "v0",   "label": "Speed",   "value": v0,   "min": 1,   "max": 12, "step": 0.5,  "unit": "m/s"},
+            {"id": "mass", "label": "Mass",    "value": mass, "min": 0.5, "max": 5,  "step": 0.5,  "unit": "kg"},
+        ],
+        "equation": f"aₒ = v²/r = {ac} m/s²   Fₒ = mv²/r = {Fc} N   T = {T_per} s   ω = {omega} rad/s",
+    }
+
+
+def _matter_pulley(params: dict, question: str) -> dict:
+    m1  = float(params.get("m1", 10.0))
+    m2  = float(params.get("m2", params.get("m_mass", 5.0)))
+    g   = float(params.get("g", 9.8))
+    den = m1 + m2 if (m1 + m2) > 0 else 1
+    a   = round((m1 - m2) * g / den, 2)
+    T   = round(2 * m1 * m2 * g / den, 2)
+    return {
+        "supported": True,
+        "domain": "pulley",
+        "physics": {"scenario": "pulley", "initialParams": {"m1": m1, "m2": m2, "g": g}},
+        "params": [
+            {"id": "m1", "label": "Mass 1 (left)",  "value": m1, "min": 1, "max": 20, "step": 0.5, "unit": "kg"},
+            {"id": "m2", "label": "Mass 2 (right)", "value": m2, "min": 1, "max": 20, "step": 0.5, "unit": "kg"},
+        ],
+        "equation": f"a = (m₁−m₂)g/(m₁+m₂) = {a} m/s²   T = {T} N",
+    }
+
+
 def _matter_freefall(params: dict, question: str) -> dict:
     mass = float(params.get("m_mass", params.get("mass", 1.0)))
     g    = float(params.get("g", 9.8))
@@ -2660,3 +2980,17 @@ def _matter_freefall(params: dict, question: str) -> dict:
         ],
         "equation": f"a = g = {g} m/s²  (free fall)",
     }
+
+
+# Populate the dispatch table now that all builder functions are defined
+_SCENE_DISPATCH.update({
+    "force":      _matter_force,
+    "collision":  _matter_collision,
+    "pendulum":   _matter_pendulum,
+    "projectile": _matter_projectile,
+    "spring":     _matter_spring,
+    "incline":    _matter_incline,
+    "freefall":   _matter_freefall,
+    "pulley":     _matter_pulley,
+    "circular":   _matter_circular,
+})

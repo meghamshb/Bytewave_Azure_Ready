@@ -124,12 +124,19 @@ function LandingHeader() {
 
           <ThemeToggle />
 
-          <Link to="/learn" style={{
-            padding: '7px 18px', borderRadius: 8,
-            background: 'var(--gradient-accent)', color: '#fff',
-            fontSize: 13, fontWeight: 600, textDecoration: 'none',
-            boxShadow: '0 2px 8px rgba(99,102,241,0.4)', flexShrink: 0,
-          }}>Get started →</Link>
+          <Link
+            to="/learn"
+            onMouseEnter={() => {
+              import('./Home').catch(() => {})
+              import('../components/LearnLayout').catch(() => {})
+            }}
+            style={{
+              padding: '7px 18px', borderRadius: 8,
+              background: 'var(--gradient-accent)', color: '#fff',
+              fontSize: 13, fontWeight: 600, textDecoration: 'none',
+              boxShadow: '0 2px 8px rgba(99,102,241,0.4)', flexShrink: 0,
+            }}
+          >Get started →</Link>
         </nav>
       </header>
     </div>
@@ -292,7 +299,7 @@ export default function Landing() {
   const { overlay } = useBlackHoleTransition()
 
   // ── Hold activation ────────────────────────────────────────────────────────
-  const { isHolding, activated, progress, startHold, cancelHold } =
+  const { isHolding, activated, progress, startHold, cancelHold, reset } =
     useHoldActivation({ duration: 800 })
 
   // Stable refs — capture-phase listeners always call the latest fn version
@@ -312,7 +319,9 @@ export default function Landing() {
     if (!el) return
 
     const onDown = () => {
-      import('./LandingReveal').catch(() => {})   // pre-warm bundle
+      import('./LandingReveal').catch(() => {})
+      import('./Home').catch(() => {})
+      import('../components/LearnLayout').catch(() => {})
       startHoldRef.current?.()
     }
     const onUp = () => cancelHoldRef.current?.()
@@ -329,9 +338,7 @@ export default function Landing() {
     }
   }, []) // empty — uses refs, so always fresh
 
-  // Allow user to dismiss the dashboard and return to the hero
-  const [dashboardDismissed, setDashboardDismissed] = useState(false)
-  const showDashboard = activated && !dashboardDismissed
+  const showDashboard = activated
 
   return (
     <div style={{ background: '#060614', height: '100dvh', overflow: 'hidden' }}>
@@ -460,7 +467,7 @@ export default function Landing() {
         {/* Dashboard — mounts in-place with Framer Motion, AnimatePresence handles exit */}
         <AnimatePresence>
           {showDashboard && (
-            <HeroDashboard key="hero-dashboard" onClose={() => setDashboardDismissed(true)} />
+            <HeroDashboard key="hero-dashboard" onClose={reset} />
           )}
         </AnimatePresence>
 

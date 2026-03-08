@@ -11,7 +11,7 @@ Usage:
 The --videos option will:
   1. List each .mp4 file found in the folder.
   2. Prompt you (or auto-generate) a short description for each video.
-  3. Use the DeepSeek LLM to generate matching Manim code from the description.
+  3. Use the Claude LLM to generate matching Manim code from the description.
   4. Add everything to the physics_examples ChromaDB collection.
 """
 
@@ -49,15 +49,15 @@ def seed_builtin_examples():
 def _generate_manim_for_description(topic: str, description: str) -> str:
     """Use the LLM to generate a Manim construct() body for a given description."""
     from dotenv import load_dotenv
-    from openai import OpenAI
+    import anthropic
 
     load_dotenv(override=True)
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        logger.warning("DEEPSEEK_API_KEY not set; skipping code generation.")
+        logger.warning("ANTHROPIC_API_KEY not set; skipping code generation.")
         return "        self.wait(2)"
 
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com", timeout=60.0)
+    client = anthropic.Anthropic(api_key=api_key, timeout=60.0)
     prompt = f"""Topic: {topic}
 Description: {description}
 
@@ -73,14 +73,13 @@ Rules:
 Output only code, no backticks."""
 
     try:
-        resp = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "Output only the construct() method body. Code only."},
-                {"role": "user", "content": prompt},
-            ],
+        resp = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=2048,
+            system="Output only the construct() method body. Code only.",
+            messages=[{"role": "user", "content": prompt}],
         )
-        return (resp.choices[0].message.content or "        self.wait(2)").strip()
+        return (resp.content[0].text or "        self.wait(2)").strip()
     except Exception as e:
         logger.error("LLM code gen failed: %s", e)
         return "        self.wait(2)"

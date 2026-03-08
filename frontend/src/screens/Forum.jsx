@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect, memo } from 'react'
 import { useForum } from '../hooks/useForum'
 import PostCard from '../components/PostCard'
+import Skeleton from '../components/Skeleton'
+import EmptyIllustration from '../components/EmptyIllustration'
 import AppNav from '../components/AppNav'
 
 // ─── Inline debounce hook (no extra dep) ─────────────────────────────────────
@@ -166,7 +168,7 @@ function collectTags(posts) {
 
 export default function Forum() {
   // Single useForum() call — all state from the same context instance
-  const { posts, upvotePost, hasUpvoted, addPost } = useForum()
+  const { posts, loading, upvotePost, hasUpvoted, addPost } = useForum()
 
   const [showModal, setShowModal] = useState(false)
   const [tagging, setTagging]     = useState(false)
@@ -315,9 +317,13 @@ export default function Forum() {
         )}
 
         {/* ── Feed ── */}
-        {filtered.length === 0 ? (
+        {loading ? (
+          <div style={S.feedCol}>
+            {[0, 1, 2, 3].map(i => <Skeleton key={i} height={110} borderRadius={16} delay={i * 0.08} />)}
+          </div>
+        ) : filtered.length === 0 ? (
           <div style={S.emptyWrap}>
-            <div style={S.emptyIcon}>🔬</div>
+            <EmptyIllustration type="no-posts" size={72} />
             <div>
               <p style={{ fontSize: 17, fontWeight: 600, color: 'var(--primary-text)', margin: '0 0 6px', fontFamily: 'var(--font-display)' }}>Nothing here yet</p>
               <p style={{ fontSize: 14, color: 'var(--primary-text-muted)', margin: 0 }}>No posts match your filter — try clearing it or start a discussion.</p>

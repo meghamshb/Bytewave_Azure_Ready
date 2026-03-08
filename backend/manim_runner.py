@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 ROOT_DIR = Path(__file__).resolve().parent.parent
 MEDIA_OUTPUT_DIR = ROOT_DIR / "media_output"
 
-MANIM_RENDER_TIMEOUT = 120
+MANIM_RENDER_TIMEOUT = 240  # increased from 120 to accommodate Coqui XTTS v2 TTS inference
 CLEANUP_MAX_AGE_HOURS = 24
 
 
@@ -23,20 +23,35 @@ class ManimExecutionError(Exception):
 
 
 def cleanup_old_media(max_age_hours: int = CLEANUP_MAX_AGE_HOURS) -> None:
-    """Delete generated .py scripts and their media subdirs older than max_age_hours."""
+    """Delete generated .py scripts and their media subdirs older than max_age_hours.
+    Videos referenced in the animations DB are never deleted."""
     try:
+        # Fetch protected video URLs from DB so saved animations survive cleanup
+        protected_ids: set[str] = set()
+        try:
+            from backend.learn import get_saved_video_urls
+            for url in get_saved_video_urls():
+                # URL pattern: /media/videos/<uuid>/480p15/PhysicsAnimation.mp4
+                parts = url.strip("/").split("/")
+                if len(parts) >= 3 and parts[0] == "media":
+                    protected_ids.add(parts[2])  # the UUID segment
+        except Exception:
+            pass
+
         cutoff = time.time() - max_age_hours * 3600
         media_videos = MEDIA_OUTPUT_DIR / "media" / "videos"
 
         for py_file in MEDIA_OUTPUT_DIR.glob("*.py"):
+            script_id = py_file.stem
+            if script_id in protected_ids:
+                continue  # saved animation — keep forever
             if py_file.stat().st_mtime < cutoff:
-                script_id = py_file.stem
                 py_file.unlink(missing_ok=True)
                 video_dir = media_videos / script_id
                 if video_dir.is_dir():
                     shutil.rmtree(video_dir, ignore_errors=True)
 
-        logger.debug("Cleanup complete")
+        logger.debug("Cleanup complete (protected=%d)", len(protected_ids))
     except Exception as e:
         logger.debug("Cleanup skipped: %s", e)
 

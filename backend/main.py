@@ -5,7 +5,7 @@ import time
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +28,7 @@ from backend.agent import (
 )
 from backend.manim_runner import run_manim_script, ManimExecutionError
 import backend.learn as _learn
+from backend.learn import save_animation, get_animations, delete_animation
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,10 +37,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 MAX_ERROR_DETAIL_LENGTH = 2000
-MAX_RENDER_RETRIES = 1  # 1 attempt + 1 LLM fix; more just multiplies timeout
+MAX_RENDER_RETRIES = 2  # attempt 0 = first render, attempt 1 = LLM self-correction via Claude
 
 # Rate limiting: max requests per minute per IP
-RATE_LIMIT_MAX = 10
+RATE_LIMIT_MAX = 120
 RATE_LIMIT_WINDOW = 60
 _rate_buckets: dict[str, list[float]] = defaultdict(list)
 
@@ -113,8 +114,11 @@ async def no_cache_frontend(request: Request, call_next):
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    # Status polling, simulation, and learning endpoints are exempt — called frequently by design
-    _exempt_prefixes = ("/api/job/", "/api/simulate", "/api/learn/")
+    _exempt_prefixes = (
+        "/api/job/", "/api/simulate", "/api/learn/",
+        "/api/progress/", "/api/recommendations/", "/api/cases/",
+        "/api/waitlist/",
+    )
     path = request.url.path
     if path.startswith("/api/") and not any(path.startswith(p) for p in _exempt_prefixes):
         client_ip = request.client.host if request.client else "unknown"
@@ -330,7 +334,7 @@ def _render_job_safe(
     """
     import threading
 
-    JOB_DEADLINE_S = 125  # must be > MANIM_RENDER_TIMEOUT (120 s)
+    JOB_DEADLINE_S = 250  # must be > MANIM_RENDER_TIMEOUT (240 s)
 
     _jobs[job_id]["status"] = "rendering"
     _jobs[job_id]["progress"] = "Rendering animation..."
@@ -352,7 +356,7 @@ def _render_job_safe(
     if t.is_alive():
         # Worker is still running past the deadline — mark as error immediately
         _jobs[job_id]["status"] = "error"
-        _jobs[job_id]["error"] = "Render timed out. Try a simpler animation or lower quality."
+        _jobs[job_id]["error"] = "Render timed out. Try a simpler animation or lower quality. (Voiceover renders take longer — this is normal on first run while the TTS model downloads.)"
         return
 
     if "result" in result_holder:
@@ -364,6 +368,13 @@ def _render_job_safe(
         if cache_q is not None and cache_p is not None:
             _set_render_cache(cache_q, cache_p, result_holder["result"])
             logger.info("Render result cached for: %s", cache_q[:60])
+        # ── Persist animation to DB ───────────────────────────────────────────
+        try:
+            video_url = result_holder["result"].get("video_url", "")
+            if video_url and question:
+                save_animation(question, video_url, quality)
+        except Exception as _save_err:
+            logger.warning("Failed to persist animation to DB (non-fatal): %s", _save_err)
     else:
         _jobs[job_id]["status"] = "error"
         _jobs[job_id]["error"] = result_holder.get("error", "Unknown render error.")
@@ -377,7 +388,7 @@ async def health():
     import os
     checks = {
         "server": "ok",
-        "deepseek_key": "ok" if os.environ.get("DEEPSEEK_API_KEY") else "missing",
+        "anthropic_key": "ok" if os.environ.get("ANTHROPIC_API_KEY") else "missing",
     }
     try:
         import manim  # noqa
@@ -394,7 +405,7 @@ async def health():
         checks["pymunk"] = "ok"
     except ImportError:
         checks["pymunk"] = "not_installed"
-    status_code = 200 if checks.get("deepseek_key") == "ok" else 503
+    status_code = 200 if checks.get("anthropic_key") == "ok" else 503
     return JSONResponse(content=checks, status_code=status_code)
 
 
@@ -421,12 +432,15 @@ async def generate_plan_and_code_endpoint(request: QuestionRequest):
 async def get_simulation_scene(request: QuestionRequest):
     """
     Return a Matter.js interactive scene config for the given physics question.
-    Used by the frontend to build the live interactive simulation alongside the Manim video.
+    Uses keyword matching first; falls back to Claude (Anthropic) classification
+    so the interactive is always in sync with the Manim video.
+    Runs in a thread-pool so the LLM call never blocks the async event loop.
     """
+    import asyncio
     logger.info("simulate: %s", request.question[:80])
     try:
         params = _extract_numeric_params(request.question)
-        scene = generate_matter_scene(request.question, params)
+        scene = await asyncio.to_thread(generate_matter_scene, request.question, params)
         return scene
     except Exception as e:
         logger.error("simulate scene generation failed: %s", e)
@@ -608,7 +622,7 @@ async def followup(request: FollowupRequest):
             followup_question = followup_question + _param_suffix
 
         # ── Fast path: try template on the ORIGINAL question with updated params ──
-        # This avoids the slow deepseek-reasoner call for simple param changes.
+        # This avoids a slow LLM code-gen call for simple param changes.
         # Merge follow-up params on top of params from the original question.
         _orig_params = _extract_numeric_params(request.original_question)
         _merged_params = {**_orig_params, **_fu_params}
@@ -830,6 +844,163 @@ async def learn_submit(req: LearnSubmitRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Adaptive (one-at-a-time) quiz flow ────────────────────────────────────────
+
+class AdaptiveSubmitRequest(BaseModel):
+    student_id: str = Field(..., min_length=1, max_length=64)
+    session_id: str = Field(..., min_length=1, max_length=64)
+    skill: str = Field(..., min_length=1, max_length=64)
+    case_id: str = Field(..., min_length=1, max_length=64)
+    question: str = Field(...)
+    answer: str = Field(...)           # correct_option letter (A/B/C/D)
+    misconception: str = Field(default="")
+    explanation: str = Field(default="")
+    student_answer: str = Field(default="")  # selected option letter
+    previous_questions: list[str] = Field(default_factory=list)
+    results_history: list[dict] = Field(default_factory=list)
+    mastery_before: int = Field(default=0)
+
+
+@app.post("/api/learn/start-adaptive")
+async def learn_start_adaptive(req: LearnSessionRequest):
+    """Start an adaptive session: returns session_id + first question."""
+    try:
+        skill_data = _learn.SKILLS.get(req.skill)
+        if not skill_data:
+            raise HTTPException(status_code=400, detail=f"Unknown skill: {req.skill}")
+        case_ids = [c["id"] for c in skill_data["cases"]]
+        if req.case_id not in case_ids:
+            raise HTTPException(status_code=400, detail=f"Unknown case: {req.case_id}")
+
+        _learn.get_or_create_student(req.student_id)
+
+        mastery_map = _learn.get_mastery(req.student_id)
+        mastery_score = mastery_map.get(req.skill, {}).get("score", 0)
+
+        session_id = _learn.start_session(req.student_id, req.skill, req.case_id)
+        question = _learn.generate_single_question(req.skill, req.case_id, mastery_score)
+
+        return {
+            "session_id": session_id,
+            "skill": req.skill,
+            "case_id": req.case_id,
+            "mastery_before": mastery_score,
+            "question": question,
+            "question_number": 1,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("learn_start_adaptive failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/learn/submit-one")
+async def learn_submit_one(req: AdaptiveSubmitRequest):
+    """Evaluate one answer, store it, update mastery, decide next step."""
+    try:
+        result = _learn.evaluate_single_answer(
+            skill=req.skill,
+            case_id=req.case_id,
+            question=req.question,
+            correct_answer=req.answer,
+            misconception=req.misconception,
+            student_answer=req.student_answer,
+        )
+
+        mastery_now = _learn.store_single_answer(
+            session_id=req.session_id,
+            student_id=req.student_id,
+            skill=req.skill,
+            question_text=req.question,
+            student_answer=req.student_answer,
+            correct=result.get("correct", False),
+            gap=result.get("gap", ""),
+            feedback=result.get("feedback", ""),
+        )
+
+        updated_history = list(req.results_history) + [{
+            "question": req.question,
+            "student_answer": req.student_answer,
+            "correct": result.get("correct", False),
+            "gap": result.get("gap", ""),
+            "feedback": result.get("feedback", ""),
+        }]
+
+        recent_correct = [r.get("correct", False) for r in updated_history]
+        questions_answered = len(updated_history)
+
+        keep_going = _learn.should_continue_session(
+            student_id=req.student_id,
+            skill=req.skill,
+            questions_answered=questions_answered,
+            recent_results=recent_correct,
+        )
+
+        feedback_text = result.get("feedback", "")
+        if not result.get("correct", False) and req.explanation:
+            feedback_text = req.explanation
+
+        response: dict[str, Any] = {
+            "correct": result.get("correct", False),
+            "feedback": feedback_text,
+            "gap": result.get("gap", ""),
+            "correct_option": req.answer,
+            "mastery_now": mastery_now,
+            "question_number": questions_answered,
+            "done": not keep_going,
+        }
+
+        if keep_going:
+            prev_qs = list(req.previous_questions) + [req.question]
+            next_q = _learn.generate_single_question(
+                req.skill, req.case_id, mastery_now, prev_qs
+            )
+            response["next_question"] = next_q
+        else:
+            summary = _learn.build_session_summary(
+                session_id=req.session_id,
+                student_id=req.student_id,
+                skill=req.skill,
+                mastery_before=req.mastery_before,
+                results_history=updated_history,
+            )
+
+            if summary.get("needs_remediation"):
+                try:
+                    remediation_prompt = _learn.get_remediation_prompt(
+                        req.case_id, summary.get("remediation_concept", "")
+                    )
+                    from backend.agent import generate_template_manim_code, match_template
+                    params = _extract_numeric_params(remediation_prompt)
+                    code = generate_template_manim_code(remediation_prompt, params)
+                    plan = f"Remediation: {req.case_id} — {summary.get('remediation_concept', '')}"
+                    job_id = str(uuid.uuid4())
+                    _jobs[job_id] = {
+                        "status": "pending",
+                        "progress": "Generating remediation animation...",
+                        "result": None,
+                        "error": None,
+                        "started_at": time.time(),
+                    }
+                    loop = asyncio.get_event_loop()
+                    loop.run_in_executor(
+                        _executor, _render_job_safe, job_id, code, plan, remediation_prompt, "low",
+                    )
+                    summary["remediation_job_id"] = job_id
+                    summary["remediation_prompt"] = remediation_prompt
+                except Exception as rem_e:
+                    logger.warning("Remediation animation failed to queue: %s", rem_e)
+
+            response["summary"] = summary
+
+        return response
+
+    except Exception as e:
+        logger.error("learn_submit_one failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/learn/profile/{student_id}")
 async def learn_profile(student_id: str):
     """Return full mastery profile for a student."""
@@ -894,7 +1065,12 @@ async def bw_recommendations(user_id: str):
         ("ready_to_master", "Ready to master"),
     ]
     for key, label in type_map:
+        seen_skills: set[str] = set()
         for item in data.get(key, []):
+            skill = item["skill"]
+            if skill in seen_skills:
+                continue
+            seen_skills.add(skill)
             mastery = item.get("mastery", 0)
             attempts = item.get("attempts", 0)
             if key == "next_for_you" and attempts == 0:
@@ -906,7 +1082,7 @@ async def bw_recommendations(user_id: str):
             else:
                 reason = f"Score is {mastery}% — one more push to master it"
             result.append({
-                "item_id":              item["skill"],
+                "item_id":              skill,
                 "item_name":            item["skill_label"],
                 "recommendation_type":  label,
                 "match_score":          item["match_pct"],
@@ -1037,26 +1213,34 @@ class BWChatRequest(BaseModel):
 @app.post("/api/chat")
 async def bw_chat(req: BWChatRequest):
     """
-    Bytewave Chat endpoint: multi-turn physics AI chat via DeepSeek.
+    Bytewave Chat endpoint: multi-turn physics AI chat via Claude.
     Always generates a PhysiMate animation when the topic is clearly visual/physical.
     Returns: {reply, animation_job_id?}
     """
-    # ── LLM reply (DeepSeek chat) ─────────────────────────────────────────────
+    # ── LLM reply (Claude chat) ───────────────────────────────────────────────
     try:
-        from openai import OpenAI as _OAI
+        import anthropic as _anthropic
         import os as _os
-        _chat_client = _OAI(
-            api_key=_os.environ.get("DEEPSEEK_API_KEY", ""),
-            base_url="https://api.deepseek.com",
+        _chat_client = _anthropic.Anthropic(
+            api_key=_os.environ.get("ANTHROPIC_API_KEY", ""),
             timeout=60.0,
         )
-        resp = _chat_client.chat.completions.create(
-            model="deepseek-chat",
-            messages=req.messages,
-            temperature=0.6,
-            max_tokens=600,
-        )
-        reply = resp.choices[0].message.content.strip()
+        # Separate system messages from conversation messages
+        _system_msgs = [m for m in req.messages if m.get("role") == "system"]
+        _conv_msgs   = [m for m in req.messages if m.get("role") != "system"]
+        _system_text = _system_msgs[0]["content"] if _system_msgs else None
+
+        _kwargs: dict = {
+            "model": "claude-haiku-4-5",
+            "max_tokens": 600,
+            "temperature": 0.6,
+            "messages": _conv_msgs,
+        }
+        if _system_text:
+            _kwargs["system"] = _system_text
+
+        resp = _chat_client.messages.create(**_kwargs)
+        reply = resp.content[0].text.strip()
     except Exception as e:
         logger.error("bw_chat LLM call failed: %s", e)
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
@@ -1075,8 +1259,10 @@ async def bw_chat(req: BWChatRequest):
          "Show spring-mass oscillation with k=8 m=2."),
         ({"elastic collision", "inelastic collision", "collision", "collide", "momentum", "billiard"},
          "Show an elastic collision between two balls m1=2 m2=1 v1=3."),
-        ({"free fall", "freefall", "falling", "drop", "gravity"},
-         "Show free fall with increasing velocity under gravity."),
+        ({"free fall", "freefall", "falling body", "falling ball", "dropping", "ball drop"},
+         "Show free fall: a ball dropped from height h=5 meters with v=gt and y=half g t squared."),
+        ({"gravity", "gravitational force", "orbital", "satellite", "kepler"},
+         "Show gravitational orbital mechanics with F = GMm over r squared."),
         ({"incline", "ramp", "slope", "wedge", "inclined plane"},
          "Show a block sliding down a frictionless inclined plane at 30 degrees."),
         ({"newton", "second law", "f=ma", "force", "friction", "block"},
@@ -1180,6 +1366,7 @@ class ForumPostRequest(BaseModel):
     upvotes: int = 0
     replies: list[dict] = Field(default_factory=list)
     createdAt: str = ""
+    case_id: str | None = None
 
 class ForumReplyRequest(BaseModel):
     id: str
@@ -1193,8 +1380,10 @@ class UpvoteRequest(BaseModel):
 
 
 @app.get("/api/forum/posts")
-async def get_forum_posts():
-    """Return server-side forum posts (user-created only — seed data lives on the client)."""
+async def get_forum_posts(case_id: str | None = None):
+    """Return server-side forum posts, optionally filtered by case_id."""
+    if case_id:
+        return [p for p in _forum_posts if p.get("case_id") == case_id]
     return _forum_posts
 
 
@@ -1331,3 +1520,24 @@ async def clips_status():
         path = _CLIPS_DIR / f"{name}.mp4"
         available[name] = {"ready": path.exists(), "url": f"/videos/clips/{name}.mp4" if path.exists() else None}
     return {"clips": available}
+
+
+# ── Saved Animations Library ──────────────────────────────────────────────────
+
+@app.get("/api/animations")
+async def list_animations():
+    """Return all saved animations, newest first."""
+    try:
+        return get_animations(limit=200)
+    except Exception as e:
+        logger.error("list_animations failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/animations/{anim_id}")
+async def remove_animation(anim_id: str):
+    """Delete a saved animation record from the library."""
+    deleted = delete_animation(anim_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Animation not found.")
+    return {"ok": True}

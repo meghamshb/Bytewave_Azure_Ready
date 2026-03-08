@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import CaseCard from '../components/CaseCard'
+import MasteryScore from '../components/MasteryScore'
 import Skeleton from '../components/Skeleton'
-import { MOCK_CASES_BY_SKILL } from '../mockData'
+import EmptyIllustration from '../components/EmptyIllustration'
 import { getTopicById } from '../physicsTopics'
+import { useUserId } from '../hooks/useAuth'
 
 function CaseSkeleton() {
   return (
@@ -20,50 +22,81 @@ export default function ChooseCase() {
   const [searchParams] = useSearchParams()
   const skillId = searchParams.get('skill') || 'motion'
   const topic   = getTopicById(skillId)
+  const userId  = useUserId()
 
-  const [cases, setCases]   = useState([])
+  const [cases, setCases]     = useState([])
   const [loading, setLoading] = useState(true)
+  const [mastery, setMastery] = useState(null)
+  const [skillStatus, setSkillStatus] = useState('Not started')
 
   useEffect(() => {
     setLoading(true)
-    fetch(`/api/cases/${skillId}`)
-      .then(res => res.json())
-      .then(data => { setCases(data); setLoading(false) })
-      .catch(() => { setCases(MOCK_CASES_BY_SKILL[skillId] || []); setLoading(false) })
-  }, [skillId])
+
+    const casesP = fetch(`/api/cases/${skillId}`)
+      .then(res => {
+        if (!res.ok) throw new Error(res.status)
+        return res.json()
+      })
+      .then(data => Array.isArray(data) ? data : [])
+      .catch(() => [])
+
+    const progressP = fetch(`/api/progress/${userId}`)
+      .then(r => {
+        if (!r.ok) throw new Error(r.status)
+        return r.json()
+      })
+      .then(data => {
+        if (Array.isArray(data)) {
+          const node = data.find(n => n.skill_id === skillId)
+          if (node) {
+            setMastery(node.mastery_score ?? 0)
+            setSkillStatus(node.status)
+          }
+        }
+      })
+      .catch(() => {})
+
+    Promise.all([casesP, progressP]).then(([caseData]) => {
+      setCases(caseData)
+      setLoading(false)
+    })
+  }, [skillId, userId])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
 
-      {/* ── Breadcrumb ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--primary-text-muted)' }}>
-        <Link to="/learn" style={{ color: 'var(--primary-text-muted)', textDecoration: 'none', fontWeight: 500 }}>Dashboard</Link>
-        <span>›</span>
-        <Link to="/learn/skill-map" style={{ color: 'var(--primary-text-muted)', textDecoration: 'none', fontWeight: 500 }}>Skill map</Link>
-        <span>›</span>
-        <span style={{ color: 'var(--primary-text)', fontWeight: 600 }}>{topic ? topic.name : 'Cases'}</span>
+      {/* Page header with mastery */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <h1 style={{
+            fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800,
+            margin: '0 0 6px', letterSpacing: '-0.02em',
+          }}>
+            {topic ? topic.name : 'Practice Cases'}
+          </h1>
+          <p style={{ color: 'var(--primary-text-muted)', fontSize: 14, margin: 0, lineHeight: 1.5 }}>
+            Choose a scenario to practice. Each one adapts to your level.
+          </p>
+        </div>
+        {mastery != null && !loading && (
+          <div style={{ flexShrink: 0, minWidth: 280 }}>
+            <MasteryScore label={topic?.name || 'Mastery'} percent={mastery} />
+          </div>
+        )}
       </div>
 
-      {/* ── Page header ── */}
-      <div>
-        <h1 className="text-h1" style={{ margin: '0 0 4px' }}>
-          {topic ? topic.name : 'Practice cases'}
-        </h1>
-        <p className="text-body-small" style={{ margin: 0 }}>
-          Pick a scenario, answer the question, and get AI feedback.
-        </p>
-      </div>
-
-      {/* ── Cases grid ── */}
+      {/* Cases grid */}
       {loading ? (
         <CaseSkeleton />
       ) : cases.length === 0 ? (
         <div style={{
-          padding: '40px 24px', textAlign: 'center',
+          padding: '48px 24px', textAlign: 'center',
           background: 'var(--bg-card)', border: '1px solid var(--border-light)',
           borderRadius: 16, color: 'var(--primary-text-muted)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
         }}>
-          <p style={{ margin: '0 0 8px', fontSize: 16, fontWeight: 600 }}>No cases available yet</p>
+          <EmptyIllustration type="no-cases" size={80} />
+          <p style={{ margin: 0, fontSize: 16, fontWeight: 600, color: 'var(--primary-text)' }}>No cases available yet</p>
           <p style={{ margin: 0, fontSize: 14 }}>Check back soon — we're adding more.</p>
         </div>
       ) : (
@@ -74,6 +107,11 @@ export default function ChooseCase() {
               title={c.title}
               subtitle={c.description}
               topicId={skillId}
+              status={
+                skillStatus === 'Mastered' ? 'mastered'
+                : skillStatus === 'In progress' ? 'attempted'
+                : undefined
+              }
               onClick={() => navigate(`/learn/assess/${c.id}?skill=${skillId}`)}
             />
           ))}

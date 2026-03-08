@@ -3,10 +3,10 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import Skeleton from '../components/Skeleton'
 import TopicIcon from '../components/TopicIcon'
+import EmptyIllustration from '../components/EmptyIllustration'
 import OnboardingFlow, { useOnboarding } from '../components/OnboardingFlow'
 import { useAuth, useUserId } from '../hooks/useAuth'
 import { track, EVENTS } from '../hooks/useAnalytics'
-import { MOCK_RECOMMENDATIONS, MOCK_PROGRESS } from '../mockData'
 
 // ─── Tiny icon set ───────────────────────────────────────────────────────────
 const IcoArrow = () => (
@@ -64,9 +64,10 @@ function StatChip({ icon, value, label, color = '#818cf8' }) {
 }
 
 // ─── Feature card (Next for you) ─────────────────────────────────────────────
-function HeroRecommCard({ title, matchPercent, topicId, reason, onClick }) {
+function HeroRecommCard({ title, matchPercent, masteryScore, topicId, reason, onClick }) {
   const [hover, setHover] = useState(false)
   const color = matchColor(matchPercent)
+  const masteryColor = masteryScore >= 80 ? 'var(--accent-success)' : masteryScore >= 50 ? 'var(--accent-warning)' : '#818cf8'
   return (
     <motion.button
       type="button"
@@ -112,6 +113,11 @@ function HeroRecommCard({ title, matchPercent, topicId, reason, onClick }) {
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15, color }}>{matchPercent}%</span>
         </div>
         <span style={{ fontSize: 10, color: 'var(--primary-text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>match</span>
+        {masteryScore > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 700, color: masteryColor }}>
+            {masteryScore}% mastery
+          </span>
+        )}
       </div>
     </motion.button>
   )
@@ -156,24 +162,35 @@ function MasteryRing({ percent = 0, label = 'Overall', size = 100 }) {
   const r = (size - 10) / 2
   const circ = 2 * Math.PI * r
   const color = percent >= 80 ? 'var(--accent-success)' : percent >= 50 ? 'var(--accent-warning)' : '#818cf8'
+  const tierLabel = percent === 0 ? 'Start a case!' : percent >= 80 ? 'Excellent' : percent >= 50 ? 'Good progress' : 'Keep going'
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
       <svg width={size} height={size}>
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border-light)" strokeWidth={8} />
-        <circle
-          cx={size / 2} cy={size / 2} r={r}
-          fill="none" stroke={color} strokeWidth={8}
-          strokeDasharray={circ}
-          strokeDashoffset={circ * (1 - Math.min(percent, 100) / 100)}
-          strokeLinecap="round"
-          transform={`rotate(-90 ${size / 2} ${size / 2})`}
-          style={{ transition: 'stroke-dashoffset 1.2s cubic-bezier(0.4,0,0.2,1)', filter: `drop-shadow(0 0 6px ${color}60)` }}
-        />
-        <text x={size / 2} y={size / 2 + 7} textAnchor="middle"
-          fontSize={18} fontWeight="800" fill={color}
+        {percent > 0 && (
+          <circle
+            cx={size / 2} cy={size / 2} r={r}
+            fill="none" stroke={color} strokeWidth={8}
+            strokeDasharray={circ}
+            strokeDashoffset={circ * (1 - Math.min(percent, 100) / 100)}
+            strokeLinecap="round"
+            transform={`rotate(-90 ${size / 2} ${size / 2})`}
+            style={{ transition: 'stroke-dashoffset 1.2s cubic-bezier(0.4,0,0.2,1)', filter: `drop-shadow(0 0 6px ${color}60)` }}
+          />
+        )}
+        <text x={size / 2} y={size / 2 + (percent > 0 ? 2 : -2)} textAnchor="middle"
+          fontSize={percent > 0 ? 22 : 14} fontWeight="800"
+          fill={percent > 0 ? color : 'var(--primary-text-muted)'}
           fontFamily="var(--font-display)">
-          {percent}%
+          {percent > 0 ? `${percent}%` : '—'}
         </text>
+        {percent > 0 && (
+          <text x={size / 2} y={size / 2 + 18} textAnchor="middle"
+            fontSize={9} fontWeight="600"
+            fill="var(--primary-text-muted)">
+            {tierLabel}
+          </text>
+        )}
       </svg>
       <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--primary-text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
         {label}
@@ -248,18 +265,20 @@ export default function Home() {
 
   useEffect(() => {
     track(EVENTS.SKILL_MAP_OPENED)
+    const minDelay = new Promise(r => setTimeout(r, 600))
     Promise.all([
       fetch(`/api/recommendations/${userId}`).then(r => { if (!r.ok) throw new Error(); return r.json() }),
       fetch(`/api/progress/${userId}`).then(r => { if (!r.ok) throw new Error(); return r.json() }),
+      minDelay,
     ])
       .then(([recs, prog]) => {
-        setRecommendations(Array.isArray(recs) ? recs : MOCK_RECOMMENDATIONS)
-        setProgress(Array.isArray(prog) ? prog : MOCK_PROGRESS)
+        setRecommendations(Array.isArray(recs) ? recs : [])
+        setProgress(Array.isArray(prog) ? prog : [])
         setLoading(false)
       })
       .catch(() => {
-        setRecommendations(MOCK_RECOMMENDATIONS)
-        setProgress(MOCK_PROGRESS)
+        setRecommendations([])
+        setProgress([])
         setLoading(false)
       })
   }, [userId])
@@ -271,8 +290,9 @@ export default function Home() {
   const stats = useMemo(() => {
     const mastered   = progress.filter(n => n.status === 'Mastered').length
     const inProgress = progress.filter(n => n.status === 'In progress').length
-    const overallPct = progress.length
-      ? Math.round(progress.reduce((s, n) => s + (n.mastery_score ?? 0), 0) / progress.length)
+    const attempted  = progress.filter(n => n.status !== 'Not started')
+    const overallPct = attempted.length
+      ? Math.round(attempted.reduce((s, n) => s + (n.mastery_score ?? 0), 0) / attempted.length)
       : 0
     return { mastered, inProgress, overallPct }
   }, [progress])
@@ -346,10 +366,10 @@ export default function Home() {
           </div>
         ) : (
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <StatChip icon={<IcoStar />}  value={`${stats.overallPct}%`} label="Overall mastery" color="var(--accent-success)" />
+            <StatChip icon={<IcoStar />}  value={stats.overallPct > 0 ? `${stats.overallPct}%` : '—'} label="Overall mastery" color="var(--accent-success)" />
             <StatChip icon={<IcoFlame />} value={stats.mastered}          label="Topics mastered" color="#f59e0b" />
             <StatChip icon={<IcoZap />}   value={stats.inProgress}        label="In progress"     color="#818cf8" />
-            <StatChip icon={<IcoCheck />} value={nextForYou.length}       label="Recommended"     color="#34d399" />
+            <StatChip icon={<IcoCheck />} value={`${stats.mastered + stats.inProgress}/${progress.length}`} label="Attempted" color="#34d399" />
           </div>
         )}
 
@@ -378,6 +398,7 @@ export default function Home() {
                       key={t.item_id}
                       title={t.item_name}
                       matchPercent={Math.round(t.match_score ?? 0)}
+                      masteryScore={t.mastery_score ?? 0}
                       topicId={t.item_id}
                       reason={t.reason}
                       onClick={() => goToCase(t.item_id)}
@@ -520,9 +541,9 @@ function getGreeting() {
 
 function EmptyState({ message, cta, onCta }) {
   return (
-    <div style={{ textAlign: 'center', padding: '28px 16px' }}>
-      <div style={{ fontSize: 32, marginBottom: 10, opacity: 0.5 }}>🔭</div>
-      <p style={{ fontSize: 14, color: 'var(--primary-text-muted)', margin: '0 0 12px' }}>{message}</p>
+    <div style={{ textAlign: 'center', padding: '28px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+      <EmptyIllustration type="no-recommendations" size={72} />
+      <p style={{ fontSize: 14, color: 'var(--primary-text-muted)', margin: 0 }}>{message}</p>
       {cta && (
         <button type="button" onClick={onCta} style={{
           background: 'none', border: 'none', color: '#818cf8',

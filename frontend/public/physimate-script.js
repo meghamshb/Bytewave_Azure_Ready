@@ -21,9 +21,59 @@ document.addEventListener('DOMContentLoaded', () => {
     let cancelEnabled    = false;
     let isGenerating     = false;
 
-    // Animation history entries: [{question, videoUrl, timestamp}]
+    // Refinement keywords — if the user's message contains these, treat as a follow-up
+    // to the current animation rather than a brand new question.
+    const FOLLOWUP_KEYWORDS = [
+        'make it', 'change', 'modify', 'adjust', 'update', 'slower', 'faster',
+        'longer', 'shorter', 'bigger', 'smaller', 'increase', 'decrease',
+        'add friction', 'remove friction', 'with friction', 'no friction',
+        'set ', 'use ', 'now ', 'instead', 'what if', 'what happens',
+        'again', 'redo', 'same but', 'this time', 'elastic', 'inelastic',
+        'higher', 'lower', 'heavier', 'lighter', 'more', 'less',
+    ];
+
+    function isRefinement(text) {
+        const t = text.toLowerCase();
+        return FOLLOWUP_KEYWORDS.some(k => t.includes(k));
+    }
+
+    function resetAnimationState() {
+        originalQuestion = '';
+        currentPlan = '';
+        currentCode = '';
+        conversationHistory = [];
+    }
+
+    // Animation history entries: [{id, question, videoUrl, timestamp}]
     let animationHistory = JSON.parse(localStorage.getItem('physiMateHistory') || '[]');
     renderHistoryPanel();
+
+    // Load persisted animations from backend DB (survives browser refresh)
+    async function loadAnimationsFromDB() {
+        try {
+            const resp = await fetch(`${API_BASE}/animations`);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (!Array.isArray(data) || !data.length) return;
+            // Merge DB entries with any localStorage-only entries, deduplicate by video URL
+            const dbEntries = data.map(a => ({
+                id: a.id,
+                question: a.question,
+                videoUrl: a.video_url,
+                timestamp: Math.round(a.created_at * 1000),
+                fromDB: true,
+            }));
+            const localUrls = new Set(animationHistory.map(e => e.videoUrl));
+            for (const e of dbEntries) {
+                if (!localUrls.has(e.videoUrl)) animationHistory.push(e);
+            }
+            animationHistory.sort((a, b) => b.timestamp - a.timestamp);
+            animationHistory = animationHistory.slice(0, 200);
+            localStorage.setItem('physiMateHistory', JSON.stringify(animationHistory));
+            renderHistoryPanel();
+        } catch (_) { /* non-fatal */ }
+    }
+    loadAnimationsFromDB();
 
     // ── Sidebar ──────────────────────────────────────────────────────────────
 
@@ -34,11 +84,41 @@ document.addEventListener('DOMContentLoaded', () => {
         historyPanel.classList.remove('open');
     });
 
+    // ── New Animation button ─────────────────────────────────────────────────
+    document.getElementById('new-animation-btn').addEventListener('click', () => {
+        if (isGenerating) return;
+        resetAnimationState();
+        chatMessages.innerHTML = `
+            <div class="welcome-screen" id="welcome-screen">
+                <div class="welcome-icon"></div>
+                <h2>What do you want to learn?</h2>
+                <p>Ask any physics question — get a live interactive simulation <em>and</em> a beautiful video explanation.</p>
+                <div class="suggestion-chips">
+                    <button class="chip" data-q="How does a pendulum work? Show me the forces involved.">Pendulum forces</button>
+                    <button class="chip" data-q="Show me projectile motion with velocity components.">Projectile motion</button>
+                    <button class="chip" data-q="Show me an elastic collision between two balls m1=2 m2=1.">Elastic collision</button>
+                    <button class="chip" data-q="Explain Newton's second law with a block on a surface.">Newton's 2nd law</button>
+                    <button class="chip" data-q="Show spring-mass oscillation with k=8 m=2.">Spring oscillation</button>
+                    <button class="chip" data-q="Show a block sliding down a frictionless inclined plane.">Inclined plane</button>
+                </div>
+            </div>`;
+        chatMessages.querySelectorAll('.chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                chatInput.value = chip.dataset.q;
+                chatInput.dispatchEvent(new Event('input'));
+                handleSend();
+            });
+        });
+        chatInput.focus();
+    });
+
     function addToHistory(question, videoUrl) {
         animationHistory.unshift({ question, videoUrl, timestamp: Date.now() });
-        if (animationHistory.length > 30) animationHistory.pop();
+        if (animationHistory.length > 200) animationHistory.pop();
         localStorage.setItem('physiMateHistory', JSON.stringify(animationHistory));
         renderHistoryPanel();
+        // Refresh from DB in the background to pick up the server-saved record
+        setTimeout(loadAnimationsFromDB, 1500);
     }
 
     function renderHistoryPanel() {
@@ -52,11 +132,25 @@ document.addEventListener('DOMContentLoaded', () => {
             li.className = 'history-item';
             li.title = entry.question;
             li.innerHTML = `
-                <div class="history-q">${escapeHtml(entry.question.slice(0, 60))}${entry.question.length > 60 ? '…' : ''}</div>
-                <div class="history-ts">${new Date(entry.timestamp).toLocaleTimeString()}</div>`;
-            li.addEventListener('click', () => {
+                <div class="history-item-main">
+                    <div class="history-q">${escapeHtml(entry.question.slice(0, 60))}${entry.question.length > 60 ? '…' : ''}</div>
+                    <div class="history-ts">${new Date(entry.timestamp).toLocaleString()}</div>
+                </div>
+                <button class="history-del" title="Remove from history" data-url="${escapeHtml(entry.videoUrl || '')}" data-id="${escapeHtml(entry.id || '')}">✕</button>`;
+            li.querySelector('.history-item-main').addEventListener('click', () => {
                 historyPanel.classList.remove('open');
                 playHistoryEntry(entry);
+            });
+            li.querySelector('.history-del').addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.dataset.id;
+                const url = e.currentTarget.dataset.url;
+                animationHistory = animationHistory.filter(a => a.videoUrl !== url);
+                localStorage.setItem('physiMateHistory', JSON.stringify(animationHistory));
+                renderHistoryPanel();
+                if (id) {
+                    try { await fetch(`${API_BASE}/animations/${id}`, { method: 'DELETE' }); } catch (_) {}
+                }
             });
             historyList.appendChild(li);
         });
@@ -107,9 +201,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (welcomeScreen && welcomeScreen.parentNode) welcomeScreen.remove();
 
-        if (originalQuestion && currentCode) {
+        // Only treat as a follow-up if the user is clearly refining the CURRENT animation.
+        // Any new physics topic always gets a fresh render.
+        if (originalQuestion && currentCode && isRefinement(text)) {
             handleFollowup(text);
         } else {
+            resetAnimationState();
             handleNewQuestion(text);
         }
     }
@@ -203,6 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 : buildPhysicsReply(plan);
             appendAssistantWithVideo(replyText, videoUrl, question);
             addToHistory(question, renderResult.video_url);
+            openVideoWindow(videoUrl, question);
             conversationHistory = [];
 
         } catch (err) {
@@ -325,6 +423,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const reply = 'Here\'s the updated animation:';
                     appendAssistantWithVideo(reply, videoUrl, message);
                     addToHistory(message, renderResult.video_url);
+                    openVideoWindow(videoUrl, message);
                     conversationHistory.push({ role: 'assistant', content: reply });
                     return;
                 }
@@ -361,6 +460,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const videoUrl = buildVideoUrl(data.video_url);
                 appendAssistantWithVideo(reply, videoUrl, message);
                 addToHistory(message, data.video_url);
+                openVideoWindow(videoUrl, message);
                 conversationHistory.push({ role: 'assistant', content: reply });
             } else {
                 const reply = data.reply || 'I couldn\'t generate a response.';
@@ -438,6 +538,73 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Simulator panel counter (unique IDs) ─────────────────────────────────
     let _simCounter = 0;
+
+    // ── Open each animation in its own dedicated browser window ─────────────
+    function openVideoWindow(videoUrl, question) {
+        const win = window.open(
+            '',
+            'physiMate_' + Date.now(),
+            'width=960,height=680,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes'
+        );
+        if (!win) return; // popup blocked
+        const q = (question || 'Physics Animation').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        win.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PhysiMate – ${q.slice(0, 60)}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0f1117;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;
+       display:flex;flex-direction:column;min-height:100vh;padding:28px 32px}
+  .top{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+  .logo{font-weight:800;font-size:18px;letter-spacing:-.03em;color:#fff}
+  .logo span{color:#818cf8}
+  .question{font-size:14px;font-weight:500;color:#94a3b8;line-height:1.5;
+            background:#1e2130;border:1px solid #2d3148;border-radius:10px;
+            padding:12px 16px;margin-bottom:20px}
+  .player-wrap{flex:1;background:#000;border-radius:14px;overflow:hidden;
+               display:flex;align-items:center;justify-content:center;min-height:380px}
+  video{width:100%;max-height:520px;border-radius:14px;display:block}
+  .footer{display:flex;align-items:center;justify-content:space-between;margin-top:18px;gap:12px}
+  .dl{display:inline-flex;align-items:center;gap:7px;padding:9px 18px;
+      background:#4f46e5;color:#fff;border-radius:8px;text-decoration:none;
+      font-size:13px;font-weight:600;transition:background .15s}
+  .dl:hover{background:#4338ca}
+  .close-btn{background:none;border:1px solid #2d3148;border-radius:8px;
+             padding:9px 16px;color:#94a3b8;font-size:13px;font-weight:600;
+             cursor:pointer;transition:border-color .15s}
+  .close-btn:hover{border-color:#818cf8;color:#818cf8}
+  .ts{font-size:12px;color:#475569}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="logo">Physi<span>Mate</span></div>
+  </div>
+  <div class="question">${q}</div>
+  <div class="player-wrap">
+    <video controls autoplay loop playsinline>
+      <source src="${videoUrl}" type="video/mp4">
+    </video>
+  </div>
+  <div class="footer">
+    <span class="ts">${new Date().toLocaleString()}</span>
+    <a class="dl" href="${videoUrl}" download="physiMate-${Date.now()}.mp4">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Download MP4
+    </a>
+    <button class="close-btn" onclick="window.close()">Close Window</button>
+  </div>
+</body>
+</html>`);
+        win.document.close();
+    }
 
     function appendAssistantWithVideo(text, videoUrl, question) {
         const wrapper = document.createElement('div');
@@ -601,9 +768,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // 8-second timeout so a slow/busy server never hangs the spinner
+            // 15-second timeout — interactive classification may use the LLM (Anthropic)
             const fetchCtrl = new AbortController();
-            const fetchTimeout = setTimeout(() => fetchCtrl.abort(), 8000);
+            const fetchTimeout = setTimeout(() => fetchCtrl.abort(), 15000);
 
             let resp;
             try {
