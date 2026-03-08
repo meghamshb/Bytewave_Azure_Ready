@@ -6,6 +6,7 @@ import Skeleton from '../components/Skeleton'
 import EmptyIllustration from '../components/EmptyIllustration'
 import { getTopicById } from '../physicsTopics'
 import { useUserId } from '../hooks/useAuth'
+import { apiFetch } from '../utils/api'
 
 function CaseSkeleton() {
   return (
@@ -32,7 +33,7 @@ export default function ChooseCase() {
   useEffect(() => {
     setLoading(true)
 
-    const casesP = fetch(`/api/cases/${skillId}`)
+    const casesP = apiFetch(`/api/cases/${skillId}`)
       .then(res => {
         if (!res.ok) throw new Error(res.status)
         return res.json()
@@ -40,7 +41,7 @@ export default function ChooseCase() {
       .then(data => Array.isArray(data) ? data : [])
       .catch(() => [])
 
-    const progressP = fetch(`/api/progress/${userId}`)
+    const progressP = apiFetch(`/api/progress/${userId}`)
       .then(r => {
         if (!r.ok) throw new Error(r.status)
         return r.json()

@@ -9,12 +9,13 @@
  */
 
 import { useState, useEffect } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import ScrollReveal from '../components/ScrollReveal'
 import LiveDemo from '../components/LiveDemo'
 import TeamSection from '../components/TeamSection'
-import MediaPreviewCard from '../components/MediaPreviewCard'
+
 import WaitlistSection from '../components/WaitlistSection'
+import { apiFetch } from '../utils/api'
 
 const S = {
   section: { padding: '80px 24px', maxWidth: 1100, margin: '0 auto' },
@@ -33,11 +34,10 @@ const S = {
 }
 
 export default function LandingReveal() {
-  const navigate = useNavigate()
   const [communityStats, setCommunityStats] = useState(null)
 
   useEffect(() => {
-    fetch('/api/forum/posts')
+    apiFetch('/api/forum/posts')
       .then(r => r.ok ? r.json() : [])
       .then(posts => {
         if (!Array.isArray(posts)) return
@@ -178,24 +178,15 @@ export default function LandingReveal() {
         </div>
       </ScrollReveal>
 
-      {/* ── Animation preview ── */}
-      <ScrollReveal>
-        <section style={{ ...S.section, paddingBottom: 40 }}>
-          <h2 style={S.sectionTitle}>See it in action</h2>
-          <p style={S.sectionSub}>AI-generated animations make abstract physics concepts click instantly.</p>
-          <MediaPreviewCard />
-        </section>
-      </ScrollReveal>
-
-      {/* ── Live Demo ── */}
+      {/* ── See it in action (demo showcase) ── */}
       <ScrollReveal>
         <section style={{ ...S.section, scrollMarginTop: 70 }} id="live-demo">
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '5px 14px', borderRadius: 100, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', marginBottom: 20 }}>
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#22c55e', display: 'inline-block', animation: 'pulse-dot 1.8s ease-in-out infinite' }} />
-            <span style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', letterSpacing: '0.09em' }}>LIVE DEMO · NO SIGN-UP</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', letterSpacing: '0.09em' }}>SEE IT IN ACTION</span>
           </div>
-          <h2 style={S.sectionTitle}>Try it right now</h2>
-          <p style={S.sectionSub}>Answer a real physics question and watch the AI find your gap — in seconds.</p>
+          <h2 style={S.sectionTitle}>How a student learns with Byte Wave</h2>
+          <p style={S.sectionSub}>Ask any physics question — get AI feedback with formulas and a generated animation, instantly.</p>
           <LiveDemo />
         </section>
       </ScrollReveal>
@@ -327,9 +318,9 @@ export default function LandingReveal() {
                   <span style={{ fontSize: 13, color: 'var(--primary-text)' }}>{f}</span>
                 </div>
               ))}
-              <button onClick={() => navigate('/auth')} style={{ display: 'block', width: '100%', textAlign: 'center', marginTop: 24, padding: '12px', borderRadius: 10, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', fontSize: 14, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(99,102,241,0.35)' }}>
-                Sign up free →
-              </button>
+              <div style={{ marginTop: 24, padding: '12px', borderRadius: 10, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', textAlign: 'center', fontSize: 13, fontWeight: 600, color: '#22c55e' }}>
+                Available now
+              </div>
             </div>
             <div style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(139,92,246,0.08))', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 20, padding: '32px 28px', position: 'relative', overflow: 'hidden' }}>
               <div style={{ position: 'absolute', top: 16, right: 16, background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: '#fff', fontSize: 10, fontWeight: 800, padding: '3px 10px', borderRadius: 100, letterSpacing: '0.06em' }}>COMING SOON</div>

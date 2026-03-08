@@ -49,16 +49,17 @@ function PageFallback() {
  * completely unauthenticated visitors.
  */
 function ProtectedRoute({ children }) {
-  const { user } = useAuth()
+  const { user, loading } = useAuth()
   const location = useLocation()
-  // Preserve any existing state (e.g. fromAuth) when redirecting back after login
+  if (loading) return <PageFallback />
   if (!user) return <Navigate to="/auth" state={{ from: location }} replace />
   return children
 }
 
 /** Redirect /auth → /learn if user is already signed in */
 function AuthRedirect({ children }) {
-  const { user } = useAuth()
+  const { user, loading } = useAuth()
+  if (loading) return <PageFallback />
   if (user) return <Navigate to="/learn" replace />
   return children
 }

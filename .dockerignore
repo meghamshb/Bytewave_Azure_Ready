@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# IDE / editor
+.cursor/
+.vscode/
+.idea/
+*.swp
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Manim runtime artifacts (rebuilt inside container)
+media_output/
+
+# Databases (ephemeral / rebuilt)
+backend/*.db
+backend/rag/chroma_data/
+backend/rag/chroma_db/
+
+# Env (injected at runtime, not baked in)
+.env
+
+# Duplicate project directory
+ByteWave/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+server.log
+
+# Docs
+architecture.md
+*.md
+!backend/assets/VOICE_SETUP.md
+!README.md

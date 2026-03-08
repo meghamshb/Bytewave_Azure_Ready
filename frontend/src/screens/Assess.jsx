@@ -4,6 +4,7 @@ import { ButtonPrimary } from '../components/ButtonPrimary'
 import Skeleton from '../components/Skeleton'
 import { getTopicById } from '../physicsTopics'
 import { useUserId } from '../hooks/useAuth'
+import { apiFetch } from '../utils/api'
 
 function AssessSkeleton() {
   return (
@@ -120,7 +121,7 @@ export default function Assess() {
   useEffect(() => {
     setLoading(true)
 
-    fetch(`/api/cases/${skillId}`)
+    apiFetch(`/api/cases/${skillId}`)
       .then(r => r.json())
       .then(data => {
         const found = Array.isArray(data)
@@ -129,7 +130,7 @@ export default function Assess() {
         setCaseData(found || null)
         if (!found) { setLoading(false); return }
 
-        return fetch('/api/learn/start-adaptive', {
+        return apiFetch('/api/learn/start-adaptive', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ student_id: studentId, skill: skillId, case_id: caseId }),
@@ -153,7 +154,7 @@ export default function Assess() {
     setLastResult(null)
 
     try {
-      const r = await fetch('/api/learn/submit-one', {
+      const r = await apiFetch('/api/learn/submit-one', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

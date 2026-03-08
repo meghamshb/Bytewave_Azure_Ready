@@ -401,15 +401,7 @@ body {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
 }
 
-/* Custom cursor (physics orbit) */
-body.custom-cursor-active.custom-cursor-visible,
-body.custom-cursor-active.custom-cursor-visible * {
-  cursor: none !important;
-}
-@keyframes cursor-orbit {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+/* Custom cursor removed — was causing input lag from getComputedStyle on every mouseover */
 
 /* Physics topic tiles – innovative hover */
 .physics-tile {

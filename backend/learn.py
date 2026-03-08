@@ -95,6 +95,30 @@ def init_db():
                 quality    TEXT DEFAULT 'low',
                 created_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS forum_posts (
+                id         TEXT PRIMARY KEY,
+                title      TEXT NOT NULL,
+                body       TEXT NOT NULL,
+                author     TEXT DEFAULT 'Student',
+                tags       TEXT DEFAULT '[]',
+                video_url  TEXT,
+                upvotes    INTEGER DEFAULT 0,
+                case_id    TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS forum_replies (
+                id         TEXT PRIMARY KEY,
+                post_id    TEXT NOT NULL REFERENCES forum_posts(id),
+                author     TEXT DEFAULT 'Student',
+                body       TEXT NOT NULL,
+                upvotes    INTEGER DEFAULT 0,
+                created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS waitlist (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                email     TEXT UNIQUE NOT NULL,
+                joined_at REAL NOT NULL
+            );
         """)
     logger.info("Learning DB initialised at %s", _DB_PATH)
 
@@ -1310,33 +1334,26 @@ def _recommendation_score(
 ) -> int:
     """
     Score how strongly to recommend a (skill, case) to a student.
-    Higher = recommend more strongly.
+    Higher = recommend more strongly.  Used for sorting, NOT displayed as a percentage.
     """
-    score = 50  # base
-
     if attempts == 0:
-        score += 20  # new content gets a boost
+        return 0
 
-    # Struggling content gets highest priority
-    if 0 < attempts and mastery < 50:
+    score = 50
+
+    if mastery < 50:
         score += 30
-
-    # In-progress but not struggling
-    elif 0 < attempts and mastery < 80:
+    elif mastery < 80:
         score += 15
-
-    # Near mastery — gentle push to complete
     elif mastery >= 80:
         score -= 10
 
-    # Recency penalty — recently attempted → lower priority (give it a rest)
     age_days = (time.time() - last_updated) / 86400 if last_updated else 9999
     if age_days < 1:
         score -= 20
     elif age_days > 7:
         score += 10
 
-    # Gap penalty turns into boost (has gaps → needs more practice)
     score += min(len(gaps) * 5, 20)
 
     return max(0, min(100, score))
@@ -1400,3 +1417,99 @@ def get_remediation_prompt(case_id: str, remediation_concept: str) -> str:
     if remediation_concept and remediation_concept.lower() not in base.lower():
         return f"{base} Focus specifically on: {remediation_concept}."
     return base
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ── Forum persistence ────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+
+def forum_get_posts(case_id: str | None = None) -> list[dict]:
+    """Return forum posts (with nested replies), optionally filtered by case_id."""
+    with _db() as conn:
+        if case_id:
+            rows = conn.execute(
+                "SELECT * FROM forum_posts WHERE case_id = ? ORDER BY created_at DESC", (case_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM forum_posts ORDER BY created_at DESC").fetchall()
+        posts = []
+        for r in rows:
+            replies = conn.execute(
+                "SELECT * FROM forum_replies WHERE post_id = ? ORDER BY created_at ASC", (r["id"],)
+            ).fetchall()
+            posts.append({
+                "id": r["id"], "title": r["title"], "body": r["body"],
+                "author": r["author"], "tags": json.loads(r["tags"] or "[]"),
+                "videoUrl": r["video_url"], "upvotes": r["upvotes"],
+                "case_id": r["case_id"], "createdAt": r["created_at"],
+                "replies": [
+                    {"id": rp["id"], "author": rp["author"], "body": rp["body"],
+                     "upvotes": rp["upvotes"], "createdAt": rp["created_at"]}
+                    for rp in replies
+                ],
+            })
+    return posts
+
+
+def forum_upsert_post(post: dict) -> None:
+    """Insert or ignore a forum post (idempotent by id)."""
+    with _db() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO forum_posts
+               (id, title, body, author, tags, video_url, upvotes, case_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                post["id"], post["title"], post["body"], post.get("author", "Student"),
+                json.dumps(post.get("tags", [])), post.get("videoUrl"),
+                post.get("upvotes", 0), post.get("case_id"),
+                post.get("createdAt", ""),
+            ),
+        )
+
+
+def forum_add_reply(post_id: str, reply: dict) -> bool:
+    """Add a reply to a post. Returns True if the post exists."""
+    with _db() as conn:
+        post = conn.execute("SELECT id FROM forum_posts WHERE id = ?", (post_id,)).fetchone()
+        if not post:
+            return False
+        conn.execute(
+            """INSERT OR IGNORE INTO forum_replies
+               (id, post_id, author, body, upvotes, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (reply["id"], post_id, reply.get("author", "Student"),
+             reply["body"], reply.get("upvotes", 0), reply.get("createdAt", "")),
+        )
+    return True
+
+
+def forum_upvote_post(post_id: str) -> int | None:
+    """Increment upvote count. Returns new count or None if not found."""
+    with _db() as conn:
+        row = conn.execute("SELECT upvotes FROM forum_posts WHERE id = ?", (post_id,)).fetchone()
+        if not row:
+            return None
+        new_count = row["upvotes"] + 1
+        conn.execute("UPDATE forum_posts SET upvotes = ? WHERE id = ?", (new_count, post_id))
+    return new_count
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ── Waitlist persistence ─────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+
+def waitlist_add(email: str) -> int:
+    """Add email to waitlist (idempotent). Returns total count."""
+    email = email.strip().lower()
+    with _db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO waitlist (email, joined_at) VALUES (?, ?)",
+            (email, time.time()),
+        )
+        count = conn.execute("SELECT COUNT(*) as c FROM waitlist").fetchone()["c"]
+    return count
+
+
+def waitlist_count() -> int:
+    with _db() as conn:
+        return conn.execute("SELECT COUNT(*) as c FROM waitlist").fetchone()["c"]

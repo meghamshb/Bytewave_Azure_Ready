@@ -8,6 +8,7 @@ import { ButtonPrimary, ButtonText } from '../components/ButtonPrimary'
 import { getTopicById } from '../physicsTopics'
 import { useUserId } from '../hooks/useAuth'
 import { useForum } from '../hooks/useForum'
+import { apiFetch } from '../utils/api'
 
 const SESSION_KEY = 'bw_feedback_state'
 
@@ -32,7 +33,7 @@ function useRemediationJob(jobId) {
         return
       }
       try {
-        const r = await fetch(`/api/job/${jobId}`)
+        const r = await apiFetch(`/api/job/${jobId}`)
         if (r.status === 404) { clearInterval(id); setJobStatus('lost'); return }
         const data = await r.json()
         if (data.status === 'done' && data.result?.video_url) {
@@ -162,7 +163,7 @@ export default function Feedback() {
   const [mastery, setMastery] = useState(null)
   useEffect(() => {
     if (!skillId) return
-    fetch(`/api/progress/${userId}`)
+    apiFetch(`/api/progress/${userId}`)
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {

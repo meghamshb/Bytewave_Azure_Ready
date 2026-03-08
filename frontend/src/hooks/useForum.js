@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { apiFetch } from '../utils/api'
 
 const STORAGE_KEY = 'bw-forum-posts'
 const UPVOTE_KEY  = 'bw-forum-upvotes'
@@ -346,7 +347,7 @@ function initPosts() {
 
 async function syncAddPostToServer(post) {
   try {
-    await fetch('/api/forum/posts', {
+    await apiFetch('/api/forum/posts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(post),
@@ -356,7 +357,7 @@ async function syncAddPostToServer(post) {
 
 async function syncAddReplyToServer(postId, reply) {
   try {
-    await fetch(`/api/forum/posts/${postId}/replies`, {
+    await apiFetch(`/api/forum/posts/${postId}/replies`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(reply),
@@ -366,7 +367,7 @@ async function syncAddReplyToServer(postId, reply) {
 
 async function syncUpvoteToServer(postId, userId) {
   try {
-    await fetch(`/api/forum/posts/${postId}/upvote`, {
+    await apiFetch(`/api/forum/posts/${postId}/upvote`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId }),
@@ -380,7 +381,7 @@ async function syncUpvoteToServer(postId, userId) {
  */
 async function fetchPostsFromServer() {
   try {
-    const res = await fetch('/api/forum/posts')
+    const res = await apiFetch('/api/forum/posts')
     if (!res.ok) throw new Error()
     const serverPosts = await res.json()
     if (Array.isArray(serverPosts) && serverPosts.length > 0) {

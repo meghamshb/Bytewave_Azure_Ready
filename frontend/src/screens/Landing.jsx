@@ -3,10 +3,8 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import Spline from '@splinetool/react-spline'
 import { useHoldActivation } from '../hooks/useHoldActivation'
-import HoldOverlay from '../components/HoldOverlay'
 import HeroDashboard from '../components/HeroDashboard'
 import WaveMark from '../components/WaveMark'
-import { useBlackHoleTransition } from '../components/BlackHoleTransition'
 
 // Detect mobile once at module level — no re-renders
 const IS_MOBILE = typeof window !== 'undefined' && window.innerWidth < 768
@@ -138,20 +136,18 @@ function LandingHeader({ onHashNav }) {
 }
 
 
-// ─── Spline hero — full-screen interactive 3D scene ──────────────────────────
-// Hold events are captured at the parent <section> level (capture phase),
-// so SplineHero is purely responsible for: loading the scene, clamping zoom,
-// fading in, and pausing when the tab is hidden.
+// ─── Spline hero — interactive 3D scene with locked camera ──────────────────
+// Animations and hover/click interactions stay enabled.
+// Camera zoom, pan, and orbit are fully disabled so the framing never changes.
+// Wheel/touchpad events are blocked on the canvas to prevent scroll-zoom.
 function SplineHero() {
   const appRef     = useRef(null)
   const cleanupRef = useRef(null)
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
 
-  const DESIGN_W     = 1440
-  const DESIGN_H     = 900
-  const MIN_DISTANCE = 3
-  const MAX_DISTANCE = 8
+  const DESIGN_W = 1440
+  const DESIGN_H = 900
 
   const handleLoad = useCallback((splineApp) => {
     appRef.current = splineApp
@@ -159,55 +155,36 @@ function SplineHero() {
     const canvas   = splineApp.renderer?.domElement ?? null
     const controls = splineApp.controls ?? splineApp._controls ?? null
 
-    // ── Lock canvas to fixed resolution ──────────────────────────────────────
-    // Spline normally matches canvas px size to viewport * DPR on every resize,
-    // burning GPU cycles.  We set it once and disconnect its resize observer so
-    // the render resolution never changes again.  CSS `width/height: 100%` on
-    // the canvas handles the visual upscale/downscale at zero compute cost.
+    // Lock canvas to fixed resolution
     try { splineApp.setSize(DESIGN_W, DESIGN_H) } catch {}
+    try { (splineApp._ro ?? splineApp._resizeObserver)?.disconnect() } catch {}
     try {
-      // Spline ≥ 0.9 exposes _ro (ResizeObserver) or _resizeObserver
-      ;(splineApp._ro ?? splineApp._resizeObserver)?.disconnect()
-    } catch {}
-    try {
-      // Remove any window 'resize' listener Spline may have added
-      if (typeof splineApp._onResize === 'function') {
+      if (typeof splineApp._onResize === 'function')
         window.removeEventListener('resize', splineApp._onResize)
-      }
     } catch {}
 
-    // Force canvas CSS to always fill the container (visual scaling only)
     if (canvas) {
-      canvas.style.width  = '100%'
-      canvas.style.height = '100%'
+      canvas.style.width     = '100%'
+      canvas.style.height    = '100%'
       canvas.style.objectFit = 'cover'
     }
 
-    // ── Zoom clamp ───────────────────────────────────────────────────────────
+    // ── Lock camera — disable zoom / orbit / pan ──────────────────────────
     if (controls) {
       try {
-        controls.enableZoom  = true
-        controls.minDistance = MIN_DISTANCE
-        controls.maxDistance = MAX_DISTANCE
+        controls.enableZoom    = false
+        controls.enableRotate  = false
+        controls.enablePan     = false
+        controls.enableDamping = false
         controls.update?.()
       } catch {}
+    }
 
-      // Wheel intercept — prevent scrolling past zoom limits
-      if (canvas) {
-        const onWheel = (e) => {
-          const dist =
-            controls.getDistance?.() ??
-            controls.object?.position?.distanceTo?.(controls.target) ??
-            null
-          if (dist === null) return
-          if ((e.deltaY < 0 && dist <= MIN_DISTANCE + 0.05) ||
-              (e.deltaY > 0 && dist >= MAX_DISTANCE - 0.05)) {
-            e.preventDefault()
-          }
-        }
-        canvas.addEventListener('wheel', onWheel, { passive: false })
-        cleanupRef.current = () => canvas.removeEventListener('wheel', onWheel)
-      }
+    // Block wheel/touchpad on the canvas so it can't zoom the scene
+    if (canvas) {
+      const blockWheel = (e) => { e.preventDefault(); e.stopPropagation() }
+      canvas.addEventListener('wheel', blockWheel, { passive: false, capture: true })
+      cleanupRef.current = () => canvas.removeEventListener('wheel', blockWheel, { capture: true })
     }
 
     setLoaded(true)
@@ -231,8 +208,13 @@ function SplineHero() {
   if (IS_MOBILE || failed) return <CSSFallbackBG />
 
   return (
-    <div style={{ position: 'absolute', inset: 0, background: '#060614', overflow: 'hidden' }}>
-      {/* Skeleton gradient while Spline downloads */}
+    <div style={{
+      position: 'absolute', inset: 0,
+      background: '#060614',
+      overflow: 'hidden',
+      maskImage:       'linear-gradient(to bottom, black 0%, black 55%, transparent 92%)',
+      WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 55%, transparent 92%)',
+    }}>
       {!loaded && (
         <div style={{
           position: 'absolute', inset: 0,
@@ -240,7 +222,6 @@ function SplineHero() {
         }} />
       )}
 
-      {/* Canvas wrapper — native pointer listeners attached in handleLoad */}
       <div style={{
         position: 'absolute', inset: 0,
         opacity:    loaded ? 1 : 0,
@@ -289,17 +270,14 @@ function CSSFallbackBG() {
 }
 
 // ─── Landing page ────────────────────────────────────────────────────────────
+// Spline hero on load → press & hold triggers the Spline scene's own white
+// animation → after hold completes, HeroDashboard slides up with all marketing.
 export default function Landing() {
-  const { overlay } = useBlackHoleTransition()
   const location = useLocation()
 
-  // ── Hold activation ────────────────────────────────────────────────────────
-  const { isHolding, activated, progress, startHold, cancelHold, reset } =
-    useHoldActivation({ duration: 800 })
+  const { isHolding, activated, startHold, cancelHold, reset } =
+    useHoldActivation({ duration: 2400 })
 
-  // Hash-based auto-activation: if URL has a hash (e.g. /#how-it-works),
-  // skip the hold and immediately show HeroDashboard so the target section
-  // mounts and can be scrolled to.
   const [hashActivated, setHashActivated] = useState(!!location.hash)
 
   useEffect(() => {
@@ -309,208 +287,133 @@ export default function Landing() {
   const handleDashboardClose = () => {
     reset()
     setHashActivated(false)
-    if (window.location.hash) {
+    if (window.location.hash)
       window.history.replaceState(null, '', window.location.pathname)
-    }
   }
 
-  // Direct hash-nav handler — bypasses React Router for same-page hash
-  // navigation, which is unreliable for hash-only changes in RR v6.
   const handleHashNav = useCallback((hash) => {
     const id = hash.replace('#', '')
-
-    // If the element is already in the DOM (HeroDashboard open), scroll directly
     const existing = document.getElementById(id)
-    if (existing) {
-      existing.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      return
-    }
+    if (existing) { existing.scrollIntoView({ behavior: 'smooth', block: 'start' }); return }
 
-    // Activate HeroDashboard so LandingReveal mounts and the target appears
     setHashActivated(true)
     window.history.replaceState(null, '', '/' + hash)
-
-    // Poll for the element — it appears after Suspense lazy-loads LandingReveal
-    const poll = (attempts = 0) => {
+    const poll = (n = 0) => {
       const el = document.getElementById(id)
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      } else if (attempts < 30) {
-        setTimeout(() => poll(attempts + 1), 120)
-      }
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      else if (n < 30) setTimeout(() => poll(n + 1), 120)
     }
     setTimeout(() => poll(), 150)
   }, [])
 
-  // Stable refs — capture-phase listeners always call the latest fn version
-  const startHoldRef  = useRef(null)
-  const cancelHoldRef = useRef(null)
-  startHoldRef.current  = startHold   // update every render, no effect needed
-  cancelHoldRef.current = cancelHold
-
-  // Ref to the hero section DOM node
+  // Capture-phase hold listeners on the hero section
+  const startRef     = useRef(startHold)
+  const cancelRef    = useRef(cancelHold)
+  const dashOpenRef  = useRef(false)
+  startRef.current   = startHold
+  cancelRef.current  = cancelHold
   const heroRef = useRef(null)
 
-  // Attach native CAPTURE-PHASE pointer listeners to the hero section.
-  // Capture phase fires BEFORE any child handler (including Spline internals),
-  // so stopPropagation() inside Spline cannot block these.
+  const showDashboard = activated || hashActivated
+  dashOpenRef.current = showDashboard
+
   useEffect(() => {
     const el = heroRef.current
     if (!el) return
-
-    const onDown = () => {
+    const down = (e) => {
+      if (dashOpenRef.current) return
       import('./LandingReveal').catch(() => {})
       import('./Home').catch(() => {})
       import('../components/LearnLayout').catch(() => {})
-      startHoldRef.current?.()
+      startRef.current?.()
     }
-    const onUp = () => cancelHoldRef.current?.()
-
-    // true = useCapture — runs before ANY child listener
-    el.addEventListener('pointerdown',  onDown, true)
-    el.addEventListener('pointerup',    onUp,   true)
-    el.addEventListener('pointerleave', onUp,   false)  // leave doesn't bubble anyway
-
+    const up = () => {
+      if (dashOpenRef.current) return
+      cancelRef.current?.()
+    }
+    el.addEventListener('pointerdown',  down, true)
+    el.addEventListener('pointerup',    up,   true)
+    el.addEventListener('pointerleave', up,   false)
     return () => {
-      el.removeEventListener('pointerdown',  onDown, true)
-      el.removeEventListener('pointerup',    onUp,   true)
-      el.removeEventListener('pointerleave', onUp,   false)
+      el.removeEventListener('pointerdown',  down, true)
+      el.removeEventListener('pointerup',    up,   true)
+      el.removeEventListener('pointerleave', up,   false)
     }
-  }, []) // empty — uses refs, so always fresh
-
-  const showDashboard = activated || hashActivated
+  }, [])
 
   return (
     <div style={{ background: '#060614', height: '100dvh', overflow: 'hidden' }}>
-      {overlay}
 
-      <LandingHeader onHashNav={handleHashNav} />
+      {!showDashboard && <LandingHeader onHashNav={handleHashNav} />}
 
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* HERO — full-screen Spline 3D scene                                    */}
-      {/* Press-and-hold 800ms → activates in-place dashboard overlay           */}
-      {/* ══════════════════════════════════════════════════════════════════════ */}
       <section
         ref={heroRef}
         style={{
           position: 'relative',
           width: '100%',
           height: '100dvh',
+          maxHeight: '100dvh',
           minHeight: 500,
           overflow: 'hidden',
           background: '#060614',
-          cursor: activated ? 'default' : 'grab',
+          isolation: 'isolate',
+          cursor: showDashboard ? 'default' : 'grab',
           userSelect: 'none',
         }}
       >
-        {/* Spline canvas — hold events captured at section level via useEffect */}
         <SplineHero />
 
-        {/*
-          PART 3 scrim: React owns the blur overlay, NOT the canvas.
-          Spline animates its own objects; React just darkens the background
-          so the dashboard can overlay cleanly.
-        */}
+        {/* Edge vignette — subtle framing, scene stays dominant */}
+        <div aria-hidden="true" style={{
+          position: 'absolute', inset: 0, zIndex: 3, pointerEvents: 'none',
+          boxShadow: 'inset 0 0 100px 30px rgba(6,6,20,0.5), inset 0 -60px 80px -20px rgba(6,6,20,0.6)',
+        }} />
+
+        {/* Soft bottom fade — just enough contrast for the hold cue */}
+        <div aria-hidden="true" style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 4,
+          height: '28%', pointerEvents: 'none',
+          background: 'linear-gradient(to top, rgba(6,6,20,0.85) 0%, rgba(6,6,20,0.4) 40%, transparent 100%)',
+        }} />
+
+        {/* Scrim when dashboard is active */}
         {showDashboard && (
           <div style={{
             position: 'absolute', inset: 0, zIndex: 8,
             background: 'rgba(6,6,20,0.65)',
-            backdropFilter: 'blur(6px)',
-            WebkitBackdropFilter: 'blur(6px)',
-            pointerEvents: 'none',
-            transition: 'opacity 0.4s ease',
+            backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
+            pointerEvents: 'none', transition: 'opacity 0.4s ease',
           }} />
         )}
 
-        {/* Radial hold-progress ring — centred over the Spline scene */}
-        <HoldOverlay
-          isHolding={isHolding}
-          activated={showDashboard}
-          progress={progress}
-        />
-
-        {/* Value prop text — fades out when dashboard activates */}
-        <div style={{
-          position:   'absolute', bottom: 0, left: 0, right: 0,
-          padding:    '0 32px 80px',
-          background: 'linear-gradient(to top, rgba(6,6,20,0.92) 0%, rgba(6,6,20,0.5) 55%, transparent 100%)',
-          pointerEvents: 'none',
-          display:    'flex', flexDirection: 'column', alignItems: 'center',
-          textAlign:  'center',
-          zIndex:     5,
-          // Fade out when activated; GPU opacity transition
-          opacity:    showDashboard ? 0 : 1,
-          transition: 'opacity 0.4s ease',
-        }}>
-          {/*
-            Hero title candidates:
-            A) "Master physics visually. AI finds every gap." (chosen — concise + product-focused)
-            B) "See physics differently. AI shows what you're missing."
-            C) "Physics mastery, powered by AI. Your gaps, visualized."
-          */}
-          <h1 style={{
-            fontFamily:   'var(--font-display)',
-            fontSize:     'clamp(28px, 4.5vw, 56px)',
-            fontWeight:   800, lineHeight: 1.08,
-            color:        '#fff', margin: '0 0 16px',
-            letterSpacing: '-0.03em',
-            textShadow:   '0 2px 40px rgba(6,6,20,0.8)',
+        {/* Hold cue — small, subtle prompt at bottom centre */}
+        {!showDashboard && (
+          <div style={{
+            position: 'absolute', bottom: 36, left: '50%',
+            transform: 'translateX(-50%)', zIndex: 7,
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+            pointerEvents: 'none', textAlign: 'center',
+            opacity: isHolding ? 0.2 : 1,
+            transition: 'opacity 0.3s ease',
           }}>
-            Master physics visually.<br />
             <span style={{
-              background:           'linear-gradient(135deg, #818cf8, #a78bfa)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor:  'transparent',
-            }}>AI finds every gap.</span>
-          </h1>
-          <p style={{
-            fontSize:  'clamp(13px, 1.4vw, 16px)',
-            lineHeight: 1.65,
-            color:     'rgba(255,255,255,0.6)',
-            margin:     0,
-            maxWidth:   480,
-          }}>
-            Solve real physics cases, get instant AI feedback, and watch animations that make concepts click. Built by students, for students.
-          </p>
-          {/* Hold hint — appears only when not holding and not activated */}
-          {!isHolding && !activated && (
-            <p style={{
-              marginTop:    16,
-              fontSize:     11,
-              fontWeight:   600,
-              letterSpacing: '0.08em',
-              color:        'rgba(129,140,248,0.55)',
-              textTransform: 'uppercase',
+              fontSize: 11, fontWeight: 600,
+              letterSpacing: '0.1em', textTransform: 'uppercase',
+              color: 'rgba(255,255,255,0.45)',
+              textShadow: '0 1px 12px rgba(6,6,20,0.8)',
             }}>
               Press &amp; hold anywhere to explore
-            </p>
-          )}
-        </div>
-
-        {/* Hold cue arrow — points down, replaced scroll cue */}
-        {!showDashboard && (
-          <div
-            aria-hidden="true"
-            style={{
-              position:   'absolute', bottom: 28, left: '50%',
-              transform:  'translateX(-50%)',
-              display:    'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-              color:      'rgba(129,140,248,0.45)', fontSize: 10, fontWeight: 700,
-              letterSpacing: '0.1em', textTransform: 'uppercase',
-              pointerEvents: 'none',
-              animation:  'scroll-bob 2.2s ease-in-out infinite',
-            }}
-          >
-            hold to reveal
-            <svg width={14} height={14} viewBox="0 0 14 14" fill="none">
+            </span>
+            <svg width={14} height={14} viewBox="0 0 14 14" fill="none"
+              style={{ animation: 'hold-bob 2.2s ease-in-out infinite' }}>
               <path d="M7 1v12M3 9l4 4 4-4"
-                stroke="currentColor" strokeWidth={1.4}
+                stroke="rgba(255,255,255,0.35)" strokeWidth={1.4}
                 strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
         )}
 
-        {/* Dashboard — mounts in-place with Framer Motion, AnimatePresence handles exit */}
+        {/* Marketing overlay — slides up after hold completes */}
         <AnimatePresence>
           {showDashboard && (
             <HeroDashboard
@@ -522,19 +425,12 @@ export default function Landing() {
         </AnimatePresence>
 
         <style>{`
-          @keyframes scroll-bob {
-            0%,100% { transform: translateX(-50%) translateY(0); }
-            50%      { transform: translateX(-50%) translateY(5px); }
+          @keyframes hold-bob {
+            0%,100% { transform: translateY(0); opacity: 0.35; }
+            50%     { transform: translateY(5px); opacity: 0.6; }
           }
         `}</style>
       </section>
-
-      <style>{`
-        @keyframes scroll-bob {
-          0%,100% { transform: translateX(-50%) translateY(0);   opacity: 0.3; }
-          50%      { transform: translateX(-50%) translateY(5px); opacity: 0.6; }
-        }
-      `}</style>
     </div>
   )
 }

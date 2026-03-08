@@ -1,77 +1,72 @@
 /**
- * useAuth — lightweight auth context
+ * useAuth — JWT-based auth context backed by the FastAPI backend.
  *
- * Currently backed by localStorage so the app works without a backend.
- * To switch to Supabase, replace every TODO block with the Supabase call shown.
- *
- * Supabase swap (one-time setup):
- *   npm i @supabase/supabase-js
- *   Create a .env file:
- *     VITE_SUPABASE_URL=https://xxx.supabase.co
- *     VITE_SUPABASE_ANON_KEY=eyJ...
- *   Then follow the TODO comments below.
+ * Flow:
+ *   signUp / signIn / continueAsGuest  →  POST /api/auth/*  →  store JWT + user in localStorage
+ *   On load, validate the stored token via GET /api/auth/me
  */
 
 import { useState, useEffect, useCallback, createContext, useContext } from 'react'
-
-// TODO (Supabase): uncomment these two lines and remove the localStorage helpers below
-// import { createClient } from '@supabase/supabase-js'
-// const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY)
+import { getToken, setToken, clearToken, apiFetch } from '../utils/api'
 
 const SESSION_KEY = 'bw_session_v2'
-const USERS_KEY   = 'bw_users_v2'
 
-function uid() {
-  return 'usr_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-}
-function loadSession() {
-  try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null') } catch { return null }
-}
-function loadUsers() {
-  try { return JSON.parse(localStorage.getItem(USERS_KEY) || '{}') } catch { return {} }
+function saveSession(user) {
+  if (user) localStorage.setItem(SESSION_KEY, JSON.stringify(user))
+  else localStorage.removeItem(SESSION_KEY)
 }
 
 // ─── Context ─────────────────────────────────────────────────────────────────
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
-  const [user,    setUser]    = useState(() => loadSession())
-  const [loading, setLoading] = useState(false)
+  const [user,    setUser]    = useState(null)
+  const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState(null)
 
-  // TODO (Supabase): replace this useEffect with:
-  // useEffect(() => {
-  //   supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null))
-  //   const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => setUser(s?.user ?? null))
-  //   return () => subscription.unsubscribe()
-  // }, [])
-
-  // ── Guest access (no email required) ───────────────────────────────────────
-  const continueAsGuest = useCallback(() => {
-    const guest = { id: uid(), email: null, name: 'Student', isGuest: true, createdAt: new Date().toISOString() }
-    localStorage.setItem(SESSION_KEY, JSON.stringify(guest))
-    setUser(guest)
-    setError(null)
-    return guest
+  useEffect(() => {
+    const token = getToken()
+    if (!token) {
+      saveSession(null)
+      setUser(null)
+      setLoading(false)
+      return
+    }
+    apiFetch('/api/auth/me')
+      .then(r => { if (!r.ok) throw new Error(); return r.json() })
+      .then(data => { setUser(data.user); saveSession(data.user) })
+      .catch(() => { clearToken(); saveSession(null); setUser(null) })
+      .finally(() => setLoading(false))
   }, [])
 
-  // ── Sign up ─────────────────────────────────────────────────────────────────
+  const continueAsGuest = useCallback(async () => {
+    setError(null)
+    try {
+      const res = await fetch('/api/auth/guest', { method: 'POST' })
+      if (!res.ok) throw new Error('Guest creation failed')
+      const { user: u, token } = await res.json()
+      setToken(token); saveSession(u); setUser(u)
+      return u
+    } catch (e) {
+      setError('Could not create guest session.')
+      return null
+    }
+  }, [])
+
   const signUp = useCallback(async (email, password, name) => {
     if (!email || !password) { setError('Email and password are required.'); return null }
     setLoading(true); setError(null)
     try {
-      // TODO (Supabase): const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { name } } })
-      // if (error) throw error; return data.user
-      const users = loadUsers()
-      const emailKey = email.toLowerCase().trim()
-      if (users[emailKey]) { setError('An account with that email already exists.'); return null }
-      const newUser = { id: uid(), email: emailKey, name: name || emailKey.split('@')[0], isGuest: false, createdAt: new Date().toISOString() }
-      users[emailKey] = { ...newUser, _pw: password }
-      localStorage.setItem(USERS_KEY, JSON.stringify(users))
-      localStorage.setItem(SESSION_KEY, JSON.stringify(newUser))
-      setUser(newUser)
-      return newUser
-    } catch (e) {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, name }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.detail || 'Sign up failed.'); return null }
+      setToken(data.token); saveSession(data.user); setUser(data.user)
+      return data.user
+    } catch {
       setError('Sign up failed. Try again.')
       return null
     } finally {
@@ -79,21 +74,20 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  // ── Sign in ─────────────────────────────────────────────────────────────────
   const signIn = useCallback(async (email, password) => {
     if (!email || !password) { setError('Email and password are required.'); return null }
     setLoading(true); setError(null)
     try {
-      // TODO (Supabase): const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-      // if (error) throw error; return data.user
-      const users  = loadUsers()
-      const stored = users[email.toLowerCase().trim()]
-      if (!stored || stored._pw !== password) { setError('Incorrect email or password.'); return null }
-      const session = { id: stored.id, email: stored.email, name: stored.name, isGuest: false, createdAt: stored.createdAt }
-      localStorage.setItem(SESSION_KEY, JSON.stringify(session))
-      setUser(session)
-      return session
-    } catch (e) {
+      const res = await fetch('/api/auth/signin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.detail || 'Incorrect email or password.'); return null }
+      setToken(data.token); saveSession(data.user); setUser(data.user)
+      return data.user
+    } catch {
       setError('Sign in failed. Try again.')
       return null
     } finally {
@@ -101,31 +95,20 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  // ── Sign out ─────────────────────────────────────────────────────────────────
   const signOut = useCallback(async () => {
-    // TODO (Supabase): await supabase.auth.signOut()
-    localStorage.removeItem(SESSION_KEY)
-    setUser(null)
+    clearToken(); saveSession(null); setUser(null)
   }, [])
 
-  // ── Update display name ──────────────────────────────────────────────────────
   const updateName = useCallback((name) => {
     setUser(prev => {
       if (!prev) return prev
       const next = { ...prev, name }
-      localStorage.setItem(SESSION_KEY, JSON.stringify(next))
-      try {
-        if (prev.email) {
-          const users = loadUsers()
-          if (users[prev.email]) { users[prev.email] = { ...users[prev.email], name }; localStorage.setItem(USERS_KEY, JSON.stringify(users)) }
-        }
-      } catch {}
+      saveSession(next)
       return next
     })
   }, [])
 
   const value = { user, loading, error, signUp, signIn, signOut, continueAsGuest, updateName, isAuthed: !!user }
-
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 

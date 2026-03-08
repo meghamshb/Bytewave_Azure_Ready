@@ -87,25 +87,8 @@ function fallbackTags(text) {
     .slice(0, 5)
 }
 
-async function aiGenerateTags(title, body) {
-  try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: 'You are a physics tag classifier. Return only a valid JSON array of tag strings.' },
-          { role: 'user', content: `Given this physics student question, return ONLY a JSON array of 4-6 short tag strings (lowercase, use hyphens for spaces, start each with #). No explanation, no markdown.\n\nTitle: ${title}\nBody: ${body}` },
-        ]
-      })
-    })
-    if (!res.ok) throw new Error()
-    const data  = await res.json()
-    const match = (data.reply || '').match(/\[[\s\S]*?\]/)
-    return match ? JSON.parse(match[0]) : fallbackTags(title + ' ' + body)
-  } catch {
-    return fallbackTags(title + ' ' + body)
-  }
+function generateTags(title, body) {
+  return fallbackTags(title + ' ' + body)
 }
 
 // ─── New-post modal ───────────────────────────────────────────────────────────
@@ -171,7 +154,6 @@ export default function Forum() {
   const { posts, loading, upvotePost, hasUpvoted, addPost } = useForum()
 
   const [showModal, setShowModal] = useState(false)
-  const [tagging, setTagging]     = useState(false)
   const [activeTag, setActiveTag] = useState(null)
   const [rawSearch, setRawSearch] = useState('')
   const [sort, setSort]           = useState('newest')
@@ -207,11 +189,9 @@ export default function Forum() {
     return result
   }, [posts, activeTag, search, sort])
 
-  const handleSubmitSafe = async (title, body) => {
-    setTagging(true)
-    const tags = await aiGenerateTags(title, body)
+  const handleSubmitSafe = (title, body) => {
+    const tags = generateTags(title, body)
     addPost(title, body, tags)
-    setTagging(false)
     setShowModal(false)
   }
 
@@ -369,9 +349,9 @@ export default function Forum() {
 
       {showModal && (
         <NewPostModal
-          onClose={() => !tagging && setShowModal(false)}
+          onClose={() => setShowModal(false)}
           onSubmit={handleSubmitSafe}
-          tagging={tagging}
+          tagging={false}
         />
       )}
 

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { track, EVENTS } from '../hooks/useAnalytics'
+import { apiFetch } from '../utils/api'
 
 const SEED_COUNT = 247
 
@@ -32,7 +33,7 @@ export default function WaitlistSection() {
 
   useEffect(() => {
     // Try server for live count, fall back to localStorage
-    fetch('/api/waitlist/count')
+    apiFetch('/api/waitlist/count')
       .then(r => r.json())
       .then(d => { if (typeof d.count === 'number') setCount(d.count) })
       .catch(() => {
@@ -55,7 +56,7 @@ export default function WaitlistSection() {
 
     // 2. POST to server — backend should store in DB + send confirmation email
     try {
-      const res = await fetch('/api/waitlist', {
+      const res = await apiFetch('/api/waitlist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: trimmed }),

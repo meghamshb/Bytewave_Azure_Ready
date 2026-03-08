@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import os
 import time
 import uuid
 from collections import defaultdict
@@ -10,7 +11,7 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse, JSONResponse, FileResponse
 from pydantic import BaseModel, Field
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from backend.agent import (
 from backend.manim_runner import run_manim_script, ManimExecutionError
 import backend.learn as _learn
 from backend.learn import save_animation, get_animations, delete_animation
+import backend.auth as _auth
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +45,10 @@ MAX_RENDER_RETRIES = 2  # attempt 0 = first render, attempt 1 = LLM self-correct
 RATE_LIMIT_MAX = 120
 RATE_LIMIT_WINDOW = 60
 _rate_buckets: dict[str, list[float]] = defaultdict(list)
+
+# Hard cap for unauthenticated /api/chat (landing page demo): 2 per IP, never resets
+_demo_chat_usage: dict[str, int] = defaultdict(int)
+DEMO_CHAT_LIMIT = 2
 
 # Async render job store (in-memory; fine for single-process deployment)
 _jobs: dict[str, dict] = {}
@@ -88,13 +94,15 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 
 app = FastAPI(title="PhysiMate – AI Physics Animator")
 
+_CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "").split(",") if os.environ.get("CORS_ORIGINS") else [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://0.0.0.0:8000",
-    ],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -102,11 +110,13 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def no_cache_frontend(request: Request, call_next):
-    """Force the browser to always fetch fresh JS/CSS — never use a cached copy."""
+async def cache_control(request: Request, call_next):
+    """Hashed asset files get long cache; non-hashed frontend files get no-cache."""
     response = await call_next(request)
     path = request.url.path
-    if path.startswith("/frontend/") and (path.endswith(".js") or path.endswith(".css")):
+    if path.startswith("/assets/") and (path.endswith(".js") or path.endswith(".css")):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif path.endswith(".html"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         response.headers["Pragma"] = "no-cache"
     return response
@@ -136,12 +146,7 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-# ── In-memory stores (swap for SQLite / Postgres in production) ───────────────
-# These persist until the server restarts. For persistence, mount a volume or
-# use a DB — the API contract stays the same.
-_waitlist: list[dict] = []          # { email, joined_at }
-_forum_posts: list[dict] = []       # mirrors useForum's structure
-_progress_store: dict[str, list] = {}  # userId → progress[] (overrides DB when present)
+SEED_WAITLIST_COUNT = 247  # shown in the waitlist UI before real signups
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
@@ -188,12 +193,16 @@ class _WarmupScene(Scene):
 
 
 @app.on_event("startup")
-async def init_learning_db():
-    """Initialise the SQLite learning database on startup."""
+async def init_databases():
+    """Initialise all SQLite tables on startup."""
     try:
         _learn.init_db()
     except Exception as exc:
         logger.warning("Learning DB init failed (non-fatal): %s", exc)
+    try:
+        _auth.init_auth_tables()
+    except Exception as exc:
+        logger.warning("Auth DB init failed (non-fatal): %s", exc)
 
 
 @app.on_event("startup")
@@ -214,6 +223,10 @@ async def prewarm_manim():
 
 @app.get("/")
 async def root():
+    """In production (frontend/dist exists), serve the SPA; otherwise return API status."""
+    index = ROOT_DIR / "frontend" / "dist" / "index.html"
+    if index.is_file():
+        return FileResponse(index)
     return JSONResponse({"status": "ok", "service": "Byte Wave API"})
 
 MEDIA_DIR = ROOT_DIR / "media_output" / "media"
@@ -407,6 +420,73 @@ async def health():
         checks["pymunk"] = "not_installed"
     status_code = 200 if checks.get("anthropic_key") == "ok" else 503
     return JSONResponse(content=checks, status_code=status_code)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ── Auth endpoints ────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_current_user(request: Request) -> dict | None:
+    """Extract user from JWT in Authorization header. Returns None if absent/invalid."""
+    return _auth.extract_user_from_request(request.headers.get("Authorization"))
+
+
+def _require_user(request: Request) -> dict:
+    """Like _get_current_user but raises 401 if not authenticated."""
+    user = _get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return user
+
+
+class AuthSignupRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=200)
+    password: str = Field(..., min_length=6, max_length=200)
+    name: str = Field(default="", max_length=60)
+
+
+class AuthSigninRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=200)
+    password: str = Field(..., min_length=1, max_length=200)
+
+
+@app.post("/api/auth/signup")
+async def auth_signup(req: AuthSignupRequest):
+    """Register a new user. Returns user + JWT token."""
+    try:
+        user = _auth.create_user(req.email, req.password, req.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _learn.get_or_create_student(user["id"], user["name"])
+    token = _auth.create_token(user)
+    return {"user": user, "token": token}
+
+
+@app.post("/api/auth/signin")
+async def auth_signin(req: AuthSigninRequest):
+    """Authenticate with email + password. Returns user + JWT token."""
+    try:
+        user = _auth.authenticate_user(req.email, req.password)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    token = _auth.create_token(user)
+    return {"user": user, "token": token}
+
+
+@app.post("/api/auth/guest")
+async def auth_guest():
+    """Create an anonymous guest session. Returns user + JWT token."""
+    user = _auth.create_guest()
+    _learn.get_or_create_student(user["id"], user["name"])
+    token = _auth.create_token(user)
+    return {"user": user, "token": token}
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    """Return the current user from the JWT. 401 if not authenticated."""
+    user = _require_user(request)
+    return {"user": user}
 
 
 @app.post("/api/generate_plan_and_code")
@@ -862,9 +942,12 @@ class AdaptiveSubmitRequest(BaseModel):
 
 
 @app.post("/api/learn/start-adaptive")
-async def learn_start_adaptive(req: LearnSessionRequest):
+async def learn_start_adaptive(req: LearnSessionRequest, request: Request):
     """Start an adaptive session: returns session_id + first question."""
     try:
+        jwt_user = _get_current_user(request)
+        student_id = jwt_user["id"] if jwt_user else req.student_id
+
         skill_data = _learn.SKILLS.get(req.skill)
         if not skill_data:
             raise HTTPException(status_code=400, detail=f"Unknown skill: {req.skill}")
@@ -872,12 +955,12 @@ async def learn_start_adaptive(req: LearnSessionRequest):
         if req.case_id not in case_ids:
             raise HTTPException(status_code=400, detail=f"Unknown case: {req.case_id}")
 
-        _learn.get_or_create_student(req.student_id)
+        _learn.get_or_create_student(student_id)
 
-        mastery_map = _learn.get_mastery(req.student_id)
+        mastery_map = _learn.get_mastery(student_id)
         mastery_score = mastery_map.get(req.skill, {}).get("score", 0)
 
-        session_id = _learn.start_session(req.student_id, req.skill, req.case_id)
+        session_id = _learn.start_session(student_id, req.skill, req.case_id)
         question = _learn.generate_single_question(req.skill, req.case_id, mastery_score)
 
         return {
@@ -896,9 +979,12 @@ async def learn_start_adaptive(req: LearnSessionRequest):
 
 
 @app.post("/api/learn/submit-one")
-async def learn_submit_one(req: AdaptiveSubmitRequest):
+async def learn_submit_one(req: AdaptiveSubmitRequest, request: Request):
     """Evaluate one answer, store it, update mastery, decide next step."""
     try:
+        jwt_user = _get_current_user(request)
+        if jwt_user:
+            req.student_id = jwt_user["id"]
         result = _learn.evaluate_single_answer(
             skill=req.skill,
             case_id=req.case_id,
@@ -1002,12 +1088,14 @@ async def learn_submit_one(req: AdaptiveSubmitRequest):
 
 
 @app.get("/api/learn/profile/{student_id}")
-async def learn_profile(student_id: str):
+async def learn_profile(student_id: str, request: Request):
     """Return full mastery profile for a student."""
     try:
-        mastery = _learn.get_mastery(student_id)
+        jwt_user = _get_current_user(request)
+        effective_id = jwt_user["id"] if jwt_user else student_id
+        mastery = _learn.get_mastery(effective_id)
         return {
-            "student_id": student_id,
+            "student_id": effective_id,
             "mastery": mastery,
             "skills": _learn.SKILLS,
         }
@@ -1030,12 +1118,14 @@ def _skill_status(score: int, attempts: int) -> str:
 
 
 @app.get("/api/progress/{user_id}")
-async def bw_progress(user_id: str):
+async def bw_progress(user_id: str, request: Request):
     """
     Return skill-map node data for Bytewave's constellation view.
     Shape: [{skill_id, skill_name, status, mastery_score}, ...]
     """
-    mastery = _learn.get_mastery(user_id)
+    jwt_user = _get_current_user(request)
+    effective_id = jwt_user["id"] if jwt_user else user_id
+    mastery = _learn.get_mastery(effective_id)
     nodes = []
     for skill_id, skill in _learn.SKILLS.items():
         m = mastery.get(skill_id, {})
@@ -1051,12 +1141,14 @@ async def bw_progress(user_id: str):
 
 
 @app.get("/api/recommendations/{user_id}")
-async def bw_recommendations(user_id: str):
+async def bw_recommendations(user_id: str, request: Request):
     """
     Return Netflix-style recommendation rows for the Bytewave Home screen.
     Shape: [{item_id, item_name, recommendation_type, match_score, reason}, ...]
     """
-    data = _learn.get_recommendations(user_id)
+    jwt_user = _get_current_user(request)
+    effective_id = jwt_user["id"] if jwt_user else user_id
+    data = _learn.get_recommendations(effective_id)
     result = []
 
     type_map = [
@@ -1073,7 +1165,7 @@ async def bw_recommendations(user_id: str):
             seen_skills.add(skill)
             mastery = item.get("mastery", 0)
             attempts = item.get("attempts", 0)
-            if key == "next_for_you" and attempts == 0:
+            if attempts == 0:
                 reason = "New topic — great time to start"
             elif key == "next_for_you":
                 reason = f"You're at {mastery}% — keep going"
@@ -1085,9 +1177,10 @@ async def bw_recommendations(user_id: str):
                 "item_id":              skill,
                 "item_name":            item["skill_label"],
                 "recommendation_type":  label,
-                "match_score":          item["match_pct"],
+                "match_score":          mastery if attempts > 0 else 0,
                 "reason":               reason,
                 "mastery_score":        mastery,
+                "attempts":             attempts,
             })
 
     return result
@@ -1211,12 +1304,22 @@ class BWChatRequest(BaseModel):
 
 
 @app.post("/api/chat")
-async def bw_chat(req: BWChatRequest):
+async def bw_chat(req: BWChatRequest, request: Request):
     """
     Bytewave Chat endpoint: multi-turn physics AI chat via Claude.
     Always generates a PhysiMate animation when the topic is clearly visual/physical.
     Returns: {reply, animation_job_id?}
     """
+    jwt_user = _get_current_user(request)
+    if not jwt_user:
+        ip = request.headers.get("X-Forwarded-For", request.client.host or "unknown").split(",")[0].strip()
+        if _demo_chat_usage[ip] >= DEMO_CHAT_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail="Demo limit reached — sign up for unlimited access.",
+            )
+        _demo_chat_usage[ip] += 1
+
     # ── LLM reply (Claude chat) ───────────────────────────────────────────────
     try:
         import anthropic as _anthropic
@@ -1245,82 +1348,7 @@ async def bw_chat(req: BWChatRequest):
         logger.error("bw_chat LLM call failed: %s", e)
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
 
-    # ── Animation trigger ─────────────────────────────────────────────────────
-    # Instead of matching the raw user message (which rarely hits templates),
-    # we map detected physics keywords → canonical template-compatible prompts.
-    # This guarantees animations fire for any recognisable physics topic.
-    _CHAT_ANIMATION_MAP = [
-        # (keywords_in_message, canonical_animation_prompt)
-        ({"pendulum", "bob", "swing"},
-         "Show a pendulum swinging with period formula T = 2pi sqrt L over g."),
-        ({"projectile", "trajectory", "launch", "cannon", "throw", "fired"},
-         "Show projectile motion with velocity components at launch angle 45 degrees."),
-        ({"spring", "oscillat", "shm", "simple harmonic", "hooke"},
-         "Show spring-mass oscillation with k=8 m=2."),
-        ({"elastic collision", "inelastic collision", "collision", "collide", "momentum", "billiard"},
-         "Show an elastic collision between two balls m1=2 m2=1 v1=3."),
-        ({"free fall", "freefall", "falling body", "falling ball", "dropping", "ball drop"},
-         "Show free fall: a ball dropped from height h=5 meters with v=gt and y=half g t squared."),
-        ({"gravity", "gravitational force", "orbital", "satellite", "kepler"},
-         "Show gravitational orbital mechanics with F = GMm over r squared."),
-        ({"incline", "ramp", "slope", "wedge", "inclined plane"},
-         "Show a block sliding down a frictionless inclined plane at 30 degrees."),
-        ({"newton", "second law", "f=ma", "force", "friction", "block"},
-         "Explain Newton's second law with a block on a surface. Show F=ma."),
-        ({"circular", "centripetal", "orbit", "satellite", "revolution"},
-         "Show circular motion with centripetal acceleration and force labelled."),
-        ({"wave", "transverse", "longitudinal", "frequency", "wavelength", "amplitude"},
-         "Show a transverse wave with wavelength frequency and wave speed labelled."),
-        ({"energy", "kinetic", "potential", "conservation", "roller"},
-         "Show conservation of energy: ball rolling down a ramp."),
-        ({"atwood", "pulley", "tension"},
-         "Show an Atwood machine with two masses and tension in the rope."),
-    ]
-
-    user_messages = [m for m in req.messages if m.get("role") == "user"]
-    last_user_msg = (user_messages[-1].get("content", "") if user_messages else "").lower()
-
-    animation_job_id = None
-    animation_prompt = None
-
-    # Find the first matching animation prompt
-    for keywords, prompt in _CHAT_ANIMATION_MAP:
-        if any(kw in last_user_msg for kw in keywords):
-            animation_prompt = prompt
-            break
-
-    # Extract numeric params only from the raw user message (e.g. "pendulum with L=1.5")
-    # Use them to override defaults; fall back to empty dict if extraction fails.
-    if animation_prompt:
-        try:
-            params = _extract_numeric_params(user_messages[-1].get("content", ""))
-            # Ensure all values are plain floats — never sets or other types
-            params = {k: float(v) for k, v in params.items()
-                      if isinstance(v, (int, float, str)) and not isinstance(v, bool)}
-        except Exception:
-            params = {}
-        try:
-            code = generate_template_manim_code(animation_prompt, params)
-            plan = f"Chat animation: {animation_prompt[:80]}"
-            animation_job_id = str(uuid.uuid4())
-            _jobs[animation_job_id] = {
-                "status": "pending", "progress": "Generating animation…",
-                "result": None, "error": None, "started_at": time.time(),
-            }
-            loop = asyncio.get_event_loop()
-            loop.run_in_executor(
-                _executor, _render_job_safe,
-                animation_job_id, code, plan, animation_prompt, "low",
-            )
-            logger.info("bw_chat animation queued: job=%s prompt=%s", animation_job_id, animation_prompt[:60])
-        except Exception as anim_e:
-            logger.warning("bw_chat animation trigger failed: %s", anim_e)
-            animation_job_id = None
-
-    return {
-        "reply": reply,
-        "animation_job_id": animation_job_id,
-    }
+    return {"reply": reply}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1330,26 +1358,22 @@ async def bw_chat(req: BWChatRequest):
 class WaitlistJoinRequest(BaseModel):
     email: str = Field(..., min_length=5, max_length=200)
 
-SEED_WAITLIST_COUNT = 247  # shown before anyone actually joins
 
 @app.post("/api/waitlist")
 async def join_waitlist(req: WaitlistJoinRequest):
-    """Add an email to the waitlist. Idempotent — duplicate emails are ignored."""
-    global _waitlist
+    """Add an email to the waitlist (persisted to SQLite). Idempotent."""
     email = req.email.strip().lower()
-    if not "@" in email:
+    if "@" not in email:
         raise HTTPException(status_code=422, detail="Invalid email address.")
-    # Deduplicate
-    if not any(w["email"] == email for w in _waitlist):
-        _waitlist.append({"email": email, "joined_at": time.time()})
-        logger.info("Waitlist: new signup %s (total %d)", email, len(_waitlist))
-    return {"ok": True, "count": SEED_WAITLIST_COUNT + len(_waitlist)}
+    real_count = _learn.waitlist_add(email)
+    logger.info("Waitlist: signup %s (total %d)", email, real_count)
+    return {"ok": True, "count": SEED_WAITLIST_COUNT + real_count}
 
 
 @app.get("/api/waitlist/count")
 async def waitlist_count():
     """Return the current waitlist count (seeded + real)."""
-    return {"count": SEED_WAITLIST_COUNT + len(_waitlist)}
+    return {"count": SEED_WAITLIST_COUNT + _learn.waitlist_count()}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1381,43 +1405,34 @@ class UpvoteRequest(BaseModel):
 
 @app.get("/api/forum/posts")
 async def get_forum_posts(case_id: str | None = None):
-    """Return server-side forum posts, optionally filtered by case_id."""
-    if case_id:
-        return [p for p in _forum_posts if p.get("case_id") == case_id]
-    return _forum_posts
+    """Return forum posts (persisted to SQLite), optionally filtered by case_id."""
+    return _learn.forum_get_posts(case_id)
 
 
 @app.post("/api/forum/posts")
 async def create_forum_post(post: ForumPostRequest):
-    """Persist a new post from the client (best-effort sync)."""
-    # Deduplicate by id
-    if not any(p["id"] == post.id for p in _forum_posts):
-        _forum_posts.insert(0, post.model_dump())
-        logger.info("Forum: new post '%s'", post.title[:60])
+    """Persist a new post to SQLite (idempotent by id)."""
+    _learn.forum_upsert_post(post.model_dump())
+    logger.info("Forum: post '%s'", post.title[:60])
     return {"ok": True}
 
 
 @app.post("/api/forum/posts/{post_id}/replies")
 async def add_reply(post_id: str, reply: ForumReplyRequest):
-    """Append a reply to an existing post."""
-    for post in _forum_posts:
-        if post["id"] == post_id:
-            # Deduplicate
-            if not any(r["id"] == reply.id for r in post.get("replies", [])):
-                post.setdefault("replies", []).append(reply.model_dump())
-            return {"ok": True}
-    # Post not found on server — that's fine (might be a seed post)
-    return {"ok": True, "note": "post not found on server; reply stored locally"}
+    """Append a reply to an existing post (persisted to SQLite)."""
+    found = _learn.forum_add_reply(post_id, reply.model_dump())
+    if not found:
+        return {"ok": True, "note": "post not found on server; reply stored locally"}
+    return {"ok": True}
 
 
 @app.post("/api/forum/posts/{post_id}/upvote")
 async def upvote_post(post_id: str, req: UpvoteRequest):
-    """Toggle upvote on a post (best-effort; client owns the truth)."""
-    for post in _forum_posts:
-        if post["id"] == post_id:
-            post["upvotes"] = post.get("upvotes", 0) + 1
-            return {"ok": True, "upvotes": post["upvotes"]}
-    return {"ok": True}
+    """Increment upvote on a post (persisted to SQLite)."""
+    new_count = _learn.forum_upvote_post(post_id)
+    if new_count is None:
+        return {"ok": True}
+    return {"ok": True, "upvotes": new_count}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1478,16 +1493,17 @@ _CLIPS_DIR = ROOT_DIR / "media_output" / "clips"
 
 
 @app.post("/api/admin/prerender-clips")
-async def prerender_clips():
+async def prerender_clips(request: Request):
     """
     Pre-render all physics clip animations to the clips/ folder.
     Call once after deploy (or as a cron job) to avoid on-demand rendering delays.
-    Protected by X-Admin-Key header matching the ADMIN_KEY env var.
+    Protected by X-Admin-Key header when ADMIN_KEY env var is set.
     """
-    import os
     admin_key = os.environ.get("ADMIN_KEY", "")
-    # No key configured → skip protection (dev mode)
-    # In production set ADMIN_KEY environment variable
+    if admin_key:
+        provided = request.headers.get("X-Admin-Key", "")
+        if provided != admin_key:
+            raise HTTPException(status_code=403, detail="Invalid or missing admin key.")
     results = {}
     _CLIPS_DIR.mkdir(parents=True, exist_ok=True)
     for name, script in _CLIP_SCRIPTS.items():
@@ -1541,3 +1557,24 @@ async def remove_animation(anim_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Animation not found.")
     return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ── Serve frontend build in production ────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# When the React frontend is built (`npm run build` inside frontend/),
+# the output lives in frontend/dist/. In production the FastAPI server
+# serves these files directly — no separate Vite dev server needed.
+
+_FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
+
+if _FRONTEND_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="frontend-assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(request: Request, full_path: str):
+        """SPA fallback: serve static files or index.html for client-side routing."""
+        file_path = _FRONTEND_DIST / full_path
+        if full_path and file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(_FRONTEND_DIST / "index.html")

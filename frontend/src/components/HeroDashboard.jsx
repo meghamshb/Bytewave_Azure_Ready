@@ -1,27 +1,16 @@
 /**
  * HeroDashboard
  *
- * After the 800ms hold completes this page slides up from the bottom,
- * covering the entire viewport (position: fixed; inset: 0; z-index: 300).
- *
- * Layout:
- *   1. Sticky top bar  — Byte Wave wordmark + "Back to hero" pill
- *   2. Hero intro      — tagline + scroll cue so the user knows they're in a new page
- *   3. LandingReveal   — full marketing story (Problem/Solution, Stats, Live Demo,
- *                        How It Works, Pricing, Waitlist)
- *   4. Bottom CTA      — "Start learning for free →" → /learn
- *
- * The Home (study dashboard) is NOT shown here — that lives at /learn.
+ * After the hold completes this page slides up from the bottom,
+ * covering the viewport. Contains all the marketing content.
  */
 
 import { lazy, Suspense, useRef, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import WaveMark from './WaveMark'
 
 const MarketingContent = lazy(() => import('../screens/LandingReveal'))
-
-const EASE = [0.22, 1, 0.36, 1]
 
 const preloadLearnChunks = () => {
   import('../screens/Home').catch(() => {})
@@ -29,8 +18,8 @@ const preloadLearnChunks = () => {
 }
 
 export default function HeroDashboard({ onClose, skipAnimation = false }) {
-  const navigate    = useNavigate()
-  const scrollRef   = useRef(null)
+  const navigate  = useNavigate()
+  const scrollRef = useRef(null)
 
   useEffect(() => { preloadLearnChunks() }, [])
 
@@ -42,8 +31,8 @@ export default function HeroDashboard({ onClose, skipAnimation = false }) {
     <motion.div
       ref={scrollRef}
       initial={skipAnimation ? { y: 0, opacity: 1 } : { y: '100vh', opacity: 0 }}
-      animate={{ y: 0,       opacity: 1 }}
-      exit={{    y: '100vh', opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      exit={{ y: '100vh', opacity: 0 }}
       transition={skipAnimation ? { duration: 0 } : { type: 'spring', damping: 30, stiffness: 220 }}
       style={{
         position:   'fixed',
@@ -65,14 +54,21 @@ export default function HeroDashboard({ onClose, skipAnimation = false }) {
         alignItems:      'center',
         justifyContent:  'space-between',
         padding:         '0 28px',
-        height:          58,
-        background:      'rgba(6,6,20,0.75)',
-        backdropFilter:  'blur(18px)',
-        WebkitBackdropFilter: 'blur(18px)',
+        height:          64,
+        background:      'rgba(6,6,20,0.82)',
+        backdropFilter:  'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
         borderBottom:    '1px solid rgba(129,140,248,0.15)',
       }}>
-        {/* Wordmark */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {/* Wordmark — click to go back to hero */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onClose?.() }}
+          onPointerDown={(e) => e.stopPropagation()}
+          style={{
+            all: 'unset', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}
+        >
           <WaveMark />
           <span style={{
             fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 700,
@@ -80,64 +76,33 @@ export default function HeroDashboard({ onClose, skipAnimation = false }) {
           }}>
             Byte Wave
           </span>
-        </div>
+        </button>
 
-        {/* Right: CTA + close */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button
-            onClick={() => navigate('/auth')}
-            onMouseEnter={preloadLearnChunks}
-            style={{
-              padding:      '7px 18px',
-              borderRadius: 8,
-              background:   'linear-gradient(135deg, #6366f1, #8b5cf6)',
-              border:       'none',
-              color:        '#fff',
-              fontSize:     13,
-              fontWeight:   700,
-              cursor:       'pointer',
-              boxShadow:    '0 2px 12px rgba(99,102,241,0.45)',
-              letterSpacing: '0.01em',
-            }}
-          >
-            Sign Up →
-          </button>
-
-          {onClose && (
-            <button
-              onClick={onClose}
-              aria-label="Back to hero"
-              style={{
-                display:         'flex',
-                alignItems:      'center',
-                gap:             6,
-                padding:         '7px 16px',
-                borderRadius:    100,
-                background:      'rgba(255,255,255,0.07)',
-                border:          '1px solid rgba(129,140,248,0.25)',
-                color:           'rgba(255,255,255,0.65)',
-                fontSize:        12,
-                fontWeight:      700,
-                cursor:          'pointer',
-                letterSpacing:   '0.06em',
-                transition:      'background 0.15s, color 0.15s',
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.background = 'rgba(255,255,255,0.13)'
-                e.currentTarget.style.color      = '#fff'
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.background = 'rgba(255,255,255,0.07)'
-                e.currentTarget.style.color      = 'rgba(255,255,255,0.65)'
-              }}
-            >
-              <svg width={10} height={10} viewBox="0 0 10 10" fill="none">
-                <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round"/>
-              </svg>
-              CLOSE
-            </button>
-          )}
-        </div>
+        {/* Right: Sign up CTA */}
+        <button
+          className="hd-signup-btn"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => navigate('/auth')}
+          onMouseEnter={e => { preloadLearnChunks(); e.currentTarget.style.transform = 'scale(1.04)'; e.currentTarget.style.boxShadow = '0 6px 28px rgba(99,102,241,0.65)' }}
+          onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 20px rgba(99,102,241,0.55)' }}
+          style={{
+            padding:       '10px 28px',
+            borderRadius:  10,
+            background:    'linear-gradient(135deg, #6366f1, #8b5cf6)',
+            border:        '2px solid rgba(255,255,255,0.15)',
+            color:         '#fff',
+            fontSize:      15,
+            fontWeight:    700,
+            cursor:        'pointer',
+            fontFamily:    'inherit',
+            boxShadow:     '0 4px 20px rgba(99,102,241,0.55)',
+            letterSpacing: '0.01em',
+            transition:    'transform 0.15s, box-shadow 0.15s',
+            animation:     'hd-btn-glow 2.5s ease-in-out infinite',
+          }}
+        >
+          Sign Up Free
+        </button>
       </div>
 
       {/* ── 2. Hero intro block ── */}
@@ -221,7 +186,6 @@ export default function HeroDashboard({ onClose, skipAnimation = false }) {
           Scroll through to see how it works — real cases, instant AI feedback, and visual animations.
         </p>
 
-        {/* Scroll cue */}
         <button
           onClick={scrollDown}
           style={{
@@ -273,132 +237,6 @@ export default function HeroDashboard({ onClose, skipAnimation = false }) {
         <MarketingContent />
       </Suspense>
 
-      {/* ── 4. Bottom CTA ── */}
-      <div style={{
-        padding:      '80px 24px 100px',
-        textAlign:    'center',
-        background:   'linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(139,92,246,0.05) 100%)',
-        borderTop:    '1px solid rgba(99,102,241,0.18)',
-        position:     'relative',
-        overflow:     'hidden',
-      }}>
-        {/* Background glow */}
-        <div style={{
-          position:     'absolute',
-          top:          '50%',
-          left:         '50%',
-          transform:    'translate(-50%, -50%)',
-          width:        600,
-          height:       600,
-          borderRadius: '50%',
-          background:   'radial-gradient(circle, rgba(99,102,241,0.1) 0%, transparent 65%)',
-          pointerEvents: 'none',
-        }} />
-
-        {/* Content */}
-        <div style={{ position: 'relative' }}>
-          <div style={{
-            display:      'inline-flex',
-            alignItems:   'center',
-            gap:          8,
-            padding:      '5px 14px',
-            borderRadius: 100,
-            background:   'rgba(99,102,241,0.1)',
-            border:       '1px solid rgba(99,102,241,0.25)',
-            marginBottom: 24,
-          }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#34d399', display: 'inline-block', animation: 'hd-pulse 2s ease-in-out infinite' }} />
-            <span style={{ fontSize: 10, fontWeight: 800, color: '#34d399', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-              Ready to start?
-            </span>
-          </div>
-
-          <h2 style={{
-            fontFamily:   'var(--font-display)',
-            fontSize:     'clamp(26px, 4vw, 44px)',
-            fontWeight:   800,
-            margin:       '0 0 14px',
-            color:        'var(--primary-text)',
-            letterSpacing: '-0.02em',
-            lineHeight:   1.1,
-          }}>
-            Find your first physics gap<br />in under 60 seconds.
-          </h2>
-
-          <p style={{
-            fontSize:    15,
-            lineHeight:  1.65,
-            color:       'var(--primary-text-muted)',
-            maxWidth:    420,
-            margin:      '0 auto 36px',
-          }}>
-            Answer one case. The AI diagnoses exactly what you need to review.
-            No sign-up required to try.
-          </p>
-
-          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => navigate('/auth')}
-              style={{
-                padding:      '15px 36px',
-                borderRadius: 12,
-                background:   'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                border:       'none',
-                color:        '#fff',
-                fontSize:     16,
-                fontWeight:   700,
-                cursor:       'pointer',
-                boxShadow:    '0 6px 28px rgba(99,102,241,0.45)',
-                letterSpacing: '0.01em',
-                transition:   'transform 0.15s, box-shadow 0.15s',
-              }}
-              onMouseEnter={e => {
-                preloadLearnChunks()
-                e.currentTarget.style.transform  = 'translateY(-2px)'
-                e.currentTarget.style.boxShadow  = '0 10px 36px rgba(99,102,241,0.55)'
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.transform  = 'none'
-                e.currentTarget.style.boxShadow  = '0 6px 28px rgba(99,102,241,0.45)'
-              }}
-            >
-              Sign up free →
-            </button>
-
-            {onClose && (
-              <button
-                onClick={onClose}
-                style={{
-                  padding:      '15px 28px',
-                  borderRadius: 12,
-                  background:   'transparent',
-                  border:       '1.5px solid var(--border-medium)',
-                  color:        'var(--primary-text-muted)',
-                  fontSize:     15,
-                  fontWeight:   600,
-                  cursor:       'pointer',
-                  transition:   'border-color 0.15s, color 0.15s',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.borderColor = 'rgba(129,140,248,0.5)'
-                  e.currentTarget.style.color       = 'var(--primary-text)'
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.borderColor = 'var(--border-medium)'
-                  e.currentTarget.style.color       = 'var(--primary-text-muted)'
-                }}
-              >
-                ← Back to hero
-              </button>
-            )}
-          </div>
-
-          <p style={{ marginTop: 20, fontSize: 12, color: 'var(--primary-text-muted)' }}>
-            No credit card · No account needed to try · Free forever plan
-          </p>
-        </div>
-      </div>
-
       {/* ── Footer ── */}
       <footer style={{
         borderTop: '1px solid rgba(255,255,255,0.08)',
@@ -424,24 +262,6 @@ export default function HeroDashboard({ onClose, skipAnimation = false }) {
             </div>
           </div>
 
-          {/* Right: nav links */}
-          <nav style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-            {[
-              { label: 'AI Chat',   to: '/chat'            },
-              { label: 'Community', to: '/forum'           },
-              { label: 'Skill map', to: '/learn/skill-map' },
-            ].map(({ label, to }) => (
-              <Link key={label} to={to} style={{
-                padding: '6px 12px', borderRadius: 8,
-                fontSize: 13, fontWeight: 600,
-                color: 'rgba(255,255,255,0.45)', textDecoration: 'none',
-                transition: 'color 0.15s',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.color = '#fff' }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.45)' }}
-              >{label}</Link>
-            ))}
-          </nav>
         </div>
         <div style={{
           maxWidth: 1100, margin: '20px auto 0',
@@ -462,6 +282,10 @@ export default function HeroDashboard({ onClose, skipAnimation = false }) {
         }
         @keyframes hd-spin {
           to { transform: rotate(360deg); }
+        }
+        @keyframes hd-btn-glow {
+          0%, 100% { box-shadow: 0 4px 20px rgba(99,102,241,0.55); }
+          50%      { box-shadow: 0 4px 28px rgba(99,102,241,0.8), 0 0 12px rgba(139,92,246,0.3); }
         }
         @media (max-width: 768px) {
           .prob-sol-grid   { grid-template-columns: 1fr !important; }

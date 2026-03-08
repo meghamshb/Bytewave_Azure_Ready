@@ -3,7 +3,7 @@
  * Redirects to /learn on success.
  */
 import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import WaveMark from '../components/WaveMark'
 
@@ -29,9 +29,11 @@ const LABEL = { fontSize: 12, fontWeight: 600, color: 'var(--primary-text-muted)
 
 export default function Auth() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { signIn, signUp, continueAsGuest, loading, error } = useAuth()
 
-  const [mode,     setMode]     = useState('signin') // 'signin' | 'signup'
+  const demoLimitHit = location.state?.reason === 'demo_limit'
+  const [mode,     setMode]     = useState(demoLimitHit ? 'signup' : 'signin') // 'signin' | 'signup'
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
   const [name,     setName]     = useState('')
@@ -50,9 +52,9 @@ export default function Auth() {
     if (user) navigate('/learn', { replace: true, state: { fromAuth: true } })
   }
 
-  const handleGuest = () => {
-    continueAsGuest()
-    navigate('/learn', { replace: true, state: { fromAuth: true } })
+  const handleGuest = async () => {
+    const guest = await continueAsGuest()
+    if (guest) navigate('/learn', { replace: true, state: { fromAuth: true } })
   }
 
   const fieldStyle = (name) => ({
@@ -78,6 +80,15 @@ export default function Auth() {
 
         {/* Card */}
         <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 20, padding: '36px 32px', boxShadow: '0 20px 60px rgba(0,0,0,0.15)' }}>
+          {demoLimitHit && (
+            <div style={{
+              padding: '12px 16px', borderRadius: 10, marginBottom: 20,
+              background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)',
+              fontSize: 13, color: '#818cf8', lineHeight: 1.5,
+            }}>
+              You've used your free demo tries. Sign up to get unlimited AI feedback, animations, and adaptive practice.
+            </div>
+          )}
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, margin: '0 0 6px', color: 'var(--primary-text)' }}>
             {isSignup ? 'Create your account' : 'Welcome back'}
           </h1>
@@ -137,11 +148,15 @@ export default function Auth() {
             <div style={{ flex: 1, height: 1, background: 'var(--border-light)' }} />
           </div>
 
-          {/* Google OAuth placeholder */}
+          {/* Google OAuth — disabled until real auth is wired */}
           <button
             type="button"
-            onClick={() => alert('Connect Supabase to enable Google sign-in.')}
-            style={{ ...BTN_GHOST, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 10 }}
+            disabled
+            style={{
+              ...BTN_GHOST,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 10,
+              opacity: 0.45, cursor: 'not-allowed',
+            }}
           >
             <svg width={18} height={18} viewBox="0 0 24 24">
               <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
@@ -149,7 +164,7 @@ export default function Auth() {
               <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
               <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
             </svg>
-            Continue with Google
+            Google sign-in coming soon
           </button>
 
           {/* Guest */}

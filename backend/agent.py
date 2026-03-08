@@ -532,6 +532,21 @@ def _extract_numeric_params(text: str) -> dict:
         if _lv:
             raw["l"] = float(_lv)
 
+    # ── Height (m) ──────────────────────────────────────────────────────────
+    # "45 m high", "height of 10", "cliff 45 m", "from a height 20 m"
+    _ht_pat = _re.search(
+        r'(?:'
+        r'(\d+\.?\d*)\s*m?\s*(?:high|tall)'                        # "45 m high"
+        r'|(?:height|cliff|tower|building)\s+(?:of\s+)?(\d+\.?\d*)\s*m?' # "height of 45 m"
+        r'|(?:from\s+(?:a\s+)?height\s+(?:of\s+)?)(\d+\.?\d*)'    # "from a height of 20"
+        r')',
+        text, _re.IGNORECASE
+    )
+    if _ht_pat and "h" not in raw and "height" not in raw and "high" not in raw:
+        _hv = _ht_pat.group(1) or _ht_pat.group(2) or _ht_pat.group(3)
+        if _hv:
+            raw["h"] = float(_hv)
+
     # ── Force (Newtons) ───────────────────────────────────────────────────────
     # "10 newtons", "force of 15 N", "applied force 20N", "F=10N"
     _force_pat = _re.search(
@@ -691,6 +706,8 @@ def _extract_numeric_params(text: str) -> dict:
         # radius / velocity
         "r": "r", "radius": "r",
         "v": "v",
+        # height (projectile from cliff, freefall)
+        "h": "h", "height": "h", "h0": "h", "high": "h",
         # rotational
         "i": "I", "inertia": "I",
         "alpha": "alpha",
@@ -795,7 +812,7 @@ def pymunk_simulate_collision(params: dict) -> str:
 _TEMPLATE_KEYWORDS: list[tuple[list[str], str]] = [
     (["collision", "collide", "elastic", "inelastic", "billiard", "momentum", "newton's cradle"], "collision"),
     (["spring", "hooke", "shm", "simple harmonic", "oscillat"], "spring"),
-    (["projectile", "parabola", "launch", "trajectory"], "projectile"),
+    (["projectile", "parabola", "launch", "trajectory", "thrown horizontally", "thrown", "cliff", "ball is thrown"], "projectile"),
     (["pendulum", "simple pendulum", "double pendulum"], "pendulum"),
     (["standing wave", "sound wave", "light wave", "wave propagat", "transverse wave", "longitudinal wave", "wave equation", "interference pattern wave"], "wave"),
     (["force", "newton", "friction", "block", "free body"], "force"),
@@ -1024,55 +1041,78 @@ def generate_template_manim_code(question: str, params: dict | None = None) -> s
         self.wait(0.5)"""
         return _get_manim_skeleton() + body
 
-    if any(k in q for k in ("projectile", "parabola", "launch", "trajectory")):
+    if any(k in q for k in ("projectile", "parabola", "launch", "trajectory",
+                              "horizontally", "thrown horizontal", "cliff")):
         import math as _math
         _v0    = params.get("v0", 7.0)
-        _theta = _math.radians(params.get("theta0", 45.0))
+        _h0    = params.get("h", params.get("H", params.get("height", 0.0)))
+        _is_horiz = ("horizontally" in q or "horizontal" in q) and _h0 > 0
+        _theta_deg = 0.0 if _is_horiz else params.get("theta0", 45.0)
+        _theta = _math.radians(_theta_deg)
         _g     = params.get("g", 9.8)
         _vx    = _v0 * _math.cos(_theta)
         _vy0   = _v0 * _math.sin(_theta)
-        _t_max = 2 * _vy0 / _g if _g > 0 else 2.0
-        _x_max = _vx * _t_max
-        _y_max = (_vy0 ** 2) / (2 * _g) if _g > 0 else 2.0
-        _x_ax  = max(6.0, round(_x_max + 0.5, 1))
-        _y_ax  = max(3.0, round(_y_max + 0.5, 1))
+
+        if _h0 > 0 and _vy0 == 0:
+            _t_max = round(_math.sqrt(2 * _h0 / _g), 3) if _g > 0 else 2.0
+        elif _h0 > 0:
+            _disc = _vy0**2 + 2 * _g * _h0
+            _t_max = round((_vy0 + _math.sqrt(max(0, _disc))) / _g, 3) if _g > 0 else 2.0
+        else:
+            _t_max = round(2 * _vy0 / _g, 3) if _g > 0 else 2.0
+
+        _x_max = round(_vx * _t_max, 2)
+        _y_peak = _h0 + (_vy0 ** 2) / (2 * _g) if _g > 0 else _h0 + 2.0
+        _x_ax  = max(6.0, round(_x_max + 1, 1))
+        _y_ax  = max(3.0, round(_y_peak + 1, 1))
+        _scale_h0 = round(_h0 / max(_y_ax, 1) * 4, 2)
+
+        if _h0 > 0:
+            _path_expr = f"lambda x: {_h0} + x * math.tan(theta) - (g / (2 * vx**2)) * x**2"
+            _eq_str = f"y = h_0 + v_0 \\sin\\theta \\cdot t - \\frac{{1}}{{2}}gt^2"
+            _params_str = f"v_0={_v0},\\;h_0={_h0}\\,m,\\;\\theta={_theta_deg}^\\circ"
+        else:
+            _path_expr = f"lambda x: x * math.tan(theta) - (g / (2 * vx**2)) * x**2"
+            _eq_str = f"y = v_0 \\sin\\theta \\cdot t - \\frac{{1}}{{2}}gt^2"
+            _params_str = f"v_0={_v0},\\;\\theta={_theta_deg}^\\circ,\\;g={_g}"
+
         body = f"""        import math
-        v0, theta_deg, g = {_v0}, {round(_math.degrees(_theta), 1)}, {_g}
+        v0, theta_deg, g, h0 = {_v0}, {_theta_deg}, {_g}, {_h0}
         theta = math.radians(theta_deg)
         vx = v0 * math.cos(theta)
         vy0 = v0 * math.sin(theta)
-        t_max = 2 * vy0 / g if g > 0 else 2.0
-        x_max = vx * t_max
-        title = Text("{title}", font_size=28).to_edge(UP)
-        axes = Axes(x_range=[0, {_x_ax}, 1], y_range=[0, {_y_ax}, 1], x_length=8, y_length=4).shift(DOWN * 0.5)
-        labels = axes.get_axis_labels(MathTex("x"), MathTex("y"))
-        path = axes.plot(lambda x: x * math.tan(theta) - (g / (2 * vx**2)) * x**2,
-                         x_range=[0, x_max], color=YELLOW)
+        t_max = {_t_max}
+        x_max = {_x_max}
+        title = Text("{title}", font_size=26).to_edge(UP)
+        axes = Axes(x_range=[0, {_x_ax}, {max(1, round(_x_ax/6))}], y_range=[0, {_y_ax}, {max(1, round(_y_ax/5))}], x_length=8, y_length=4).shift(DOWN * 0.5)
+        labels = axes.get_axis_labels(MathTex("x\\,(m)"), MathTex("y\\,(m)"))
+        path_fn = {_path_expr}
+        path = axes.plot(path_fn, x_range=[0, x_max], color=YELLOW)
         dot = Dot(color=RED, radius=0.1).move_to(path.get_start())
-        # Velocity component arrows that track the dot
         vx_arrow = always_redraw(lambda: Arrow(
             dot.get_center(), dot.get_center() + RIGHT * 1.0,
             color=GREEN, buff=0, max_tip_length_to_length_ratio=0.3, stroke_width=3
         ))
-        vy_cur = ValueTracker(vy0)
+        vy_val = ValueTracker(vy0)
         vy_arrow = always_redraw(lambda: Arrow(
             dot.get_center(),
-            dot.get_center() + UP * max(-1.0, min(1.0, vy_cur.get_value() / max(vy0, 0.01))),
+            dot.get_center() + DOWN * min(1.2, max(0.1, abs(vy_val.get_value()) / max(abs(g * t_max), 0.01))),
             color=BLUE, buff=0, max_tip_length_to_length_ratio=0.3, stroke_width=3
         ))
-        # Static labels at corner (avoid per-frame LaTeX re-render)
-        vx_label = MathTex(r"v_x = v_0\\cos\\theta", font_size=22, color=GREEN).to_corner(UR).shift(DOWN*0.8)
-        vy_label = MathTex(r"v_y = v_0\\sin\\theta - gt", font_size=22, color=BLUE).to_corner(UR).shift(DOWN*1.4)
-        eq = MathTex(r"y = v_0\\sin\\theta \\cdot t - \\frac{{1}}{{2}}gt^2", font_size=24, color=WHITE).to_edge(DOWN)
-        params_label = MathTex(r"v_0={_v0},\\;\\theta={round(_math.degrees(_theta),1)}^\\circ,\\;g={_g}", font_size=20, color=YELLOW).to_corner(UR).shift(DOWN*0.4)
+        vx_label = MathTex(r"v_x = {round(_vx, 1)}\\,\\text{{m/s}}", font_size=22, color=GREEN).to_corner(UR).shift(DOWN*0.8)
+        vy_label = MathTex(r"v_y = g \\cdot t", font_size=22, color=BLUE).to_corner(UR).shift(DOWN*1.4)
+        eq = MathTex(r"{_eq_str}", font_size=22, color=WHITE).to_edge(DOWN)
+        params_label = MathTex(r"{_params_str}", font_size=20, color=YELLOW).to_corner(UR).shift(DOWN*0.4)
         g_arrow = always_redraw(lambda: Arrow(dot.get_center(), dot.get_center() + DOWN * 0.6, color=RED, buff=0, max_tip_length_to_length_ratio=0.3, stroke_width=2))
-        g_lbl = MathTex(r"g", font_size=20, color=RED).to_edge(DOWN).shift(UP*0.7 + RIGHT*3)
+        g_lbl = MathTex(r"g={_g}", font_size=18, color=RED).to_edge(DOWN).shift(UP*0.7 + RIGHT*3)
+        t_label = MathTex(r"t = {round(_t_max, 2)}\\,\\text{{s}},\\;x = {_x_max}\\,\\text{{m}}", font_size=20, color=ORANGE).to_corner(DL).shift(UP*0.6)
         self.play(Write(title))
         self.play(Create(axes), Write(labels))
         self.play(Write(vx_label), Write(vy_label), Write(eq), Write(params_label), Write(g_lbl))
         self.play(Create(path), run_time=1.5)
         self.add(dot, vx_arrow, vy_arrow, g_arrow)
-        self.play(MoveAlongPath(dot, path), vy_cur.animate.set_value(-vy0), run_time=2, rate_func=linear)
+        self.play(MoveAlongPath(dot, path), vy_val.animate.set_value(-g * t_max), run_time=2.5, rate_func=linear)
+        self.play(Write(t_label))
         self.wait(0.5)"""
         return _get_manim_skeleton() + body
 
