@@ -1,11 +1,10 @@
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import Spline from '@splinetool/react-spline'
 import { useHoldActivation } from '../hooks/useHoldActivation'
 import HoldOverlay from '../components/HoldOverlay'
 import HeroDashboard from '../components/HeroDashboard'
-import ThemeToggle from '../components/ThemeToggle'
 import WaveMark from '../components/WaveMark'
 import { useBlackHoleTransition } from '../components/BlackHoleTransition'
 
@@ -19,7 +18,8 @@ const HEADER_H = 58     // px — keep in sync with header height below
 // Over the hero: fully transparent, all text white.
 // After scrolling past the hero: glass bg + text switches to theme colour.
 // Uses direct DOM writes — zero re-renders on every scroll tick.
-function LandingHeader() {
+function LandingHeader({ onHashNav }) {
+  const navigate   = useNavigate()
   const wrapRef    = useRef(null)
   const navRef     = useRef(null)
   const logoRef    = useRef(null)
@@ -66,30 +66,27 @@ function LandingHeader() {
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
 
-  const makeLink = ({ label, href, isAnchor }) => {
-    const props = {
-      className: 'nav-link',
-      style: {
-        color: 'rgba(255,255,255,0.72)',
-        textDecoration: 'none',
-        fontSize: 13, fontWeight: 600,
-        padding: '6px 14px', borderRadius: 8,
-        transition: 'background 0.15s, color 0.15s',
-      },
-      onMouseEnter: e => {
-        const dark = navRef.current?.dataset.scrolled === 'true'
-        e.currentTarget.style.background = dark ? 'rgba(99,102,241,0.08)' : 'rgba(255,255,255,0.1)'
-        e.currentTarget.style.color      = dark ? 'var(--primary-text)' : '#fff'
-      },
-      onMouseLeave: e => {
-        const dark = navRef.current?.dataset.scrolled === 'true'
-        e.currentTarget.style.background = 'transparent'
-        e.currentTarget.style.color      = dark ? 'var(--primary-text-muted)' : 'rgba(255,255,255,0.72)'
-      },
-    }
-    return isAnchor
-      ? <a key={label} href={href} {...props}>{label}</a>
-      : <Link key={label} to={href} {...props}>{label}</Link>
+  const linkStyle = {
+    className: 'nav-link',
+    style: {
+      color: 'rgba(255,255,255,0.72)',
+      textDecoration: 'none',
+      fontSize: 13, fontWeight: 600,
+      padding: '6px 14px', borderRadius: 8,
+      transition: 'background 0.15s, color 0.15s',
+      cursor: 'pointer', background: 'none', border: 'none',
+      fontFamily: 'inherit',
+    },
+    onMouseEnter: e => {
+      const dark = navRef.current?.dataset.scrolled === 'true'
+      e.currentTarget.style.background = dark ? 'rgba(99,102,241,0.08)' : 'rgba(255,255,255,0.1)'
+      e.currentTarget.style.color      = dark ? 'var(--primary-text)' : '#fff'
+    },
+    onMouseLeave: e => {
+      const dark = navRef.current?.dataset.scrolled === 'true'
+      e.currentTarget.style.background = 'transparent'
+      e.currentTarget.style.color      = dark ? 'var(--primary-text-muted)' : 'rgba(255,255,255,0.72)'
+    },
   }
 
   return (
@@ -116,16 +113,12 @@ function LandingHeader() {
         </Link>
 
         <nav ref={navRef} data-scrolled="false" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          {[
-            { label: 'How it works', href: '#how-it-works', isAnchor: true },
-            { label: 'AI Chat',      href: '/chat' },
-            { label: 'Community',    href: '/forum' },
-          ].map(makeLink)}
-
-          <ThemeToggle />
-
-          <Link
-            to="/learn"
+          <button
+            {...linkStyle}
+            onClick={() => onHashNav('#how-it-works')}
+          >How it works</button>
+          <button
+            onClick={() => navigate('/auth')}
             onMouseEnter={() => {
               import('./Home').catch(() => {})
               import('../components/LearnLayout').catch(() => {})
@@ -133,10 +126,11 @@ function LandingHeader() {
             style={{
               padding: '7px 18px', borderRadius: 8,
               background: 'var(--gradient-accent)', color: '#fff',
-              fontSize: 13, fontWeight: 600, textDecoration: 'none',
+              fontSize: 13, fontWeight: 600, border: 'none',
+              cursor: 'pointer', fontFamily: 'inherit',
               boxShadow: '0 2px 8px rgba(99,102,241,0.4)', flexShrink: 0,
             }}
-          >Get started →</Link>
+          >Sign Up →</button>
         </nav>
       </header>
     </div>
@@ -297,10 +291,56 @@ function CSSFallbackBG() {
 // ─── Landing page ────────────────────────────────────────────────────────────
 export default function Landing() {
   const { overlay } = useBlackHoleTransition()
+  const location = useLocation()
 
   // ── Hold activation ────────────────────────────────────────────────────────
   const { isHolding, activated, progress, startHold, cancelHold, reset } =
     useHoldActivation({ duration: 800 })
+
+  // Hash-based auto-activation: if URL has a hash (e.g. /#how-it-works),
+  // skip the hold and immediately show HeroDashboard so the target section
+  // mounts and can be scrolled to.
+  const [hashActivated, setHashActivated] = useState(!!location.hash)
+
+  useEffect(() => {
+    if (location.hash) setHashActivated(true)
+  }, [location.hash])
+
+  const handleDashboardClose = () => {
+    reset()
+    setHashActivated(false)
+    if (window.location.hash) {
+      window.history.replaceState(null, '', window.location.pathname)
+    }
+  }
+
+  // Direct hash-nav handler — bypasses React Router for same-page hash
+  // navigation, which is unreliable for hash-only changes in RR v6.
+  const handleHashNav = useCallback((hash) => {
+    const id = hash.replace('#', '')
+
+    // If the element is already in the DOM (HeroDashboard open), scroll directly
+    const existing = document.getElementById(id)
+    if (existing) {
+      existing.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+
+    // Activate HeroDashboard so LandingReveal mounts and the target appears
+    setHashActivated(true)
+    window.history.replaceState(null, '', '/' + hash)
+
+    // Poll for the element — it appears after Suspense lazy-loads LandingReveal
+    const poll = (attempts = 0) => {
+      const el = document.getElementById(id)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      } else if (attempts < 30) {
+        setTimeout(() => poll(attempts + 1), 120)
+      }
+    }
+    setTimeout(() => poll(), 150)
+  }, [])
 
   // Stable refs — capture-phase listeners always call the latest fn version
   const startHoldRef  = useRef(null)
@@ -338,13 +378,13 @@ export default function Landing() {
     }
   }, []) // empty — uses refs, so always fresh
 
-  const showDashboard = activated
+  const showDashboard = activated || hashActivated
 
   return (
     <div style={{ background: '#060614', height: '100dvh', overflow: 'hidden' }}>
       {overlay}
 
-      <LandingHeader />
+      <LandingHeader onHashNav={handleHashNav} />
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {/* HERO — full-screen Spline 3D scene                                    */}
@@ -402,29 +442,35 @@ export default function Landing() {
           opacity:    showDashboard ? 0 : 1,
           transition: 'opacity 0.4s ease',
         }}>
+          {/*
+            Hero title candidates:
+            A) "Master physics visually. AI finds every gap." (chosen — concise + product-focused)
+            B) "See physics differently. AI shows what you're missing."
+            C) "Physics mastery, powered by AI. Your gaps, visualized."
+          */}
           <h1 style={{
             fontFamily:   'var(--font-display)',
             fontSize:     'clamp(28px, 4.5vw, 56px)',
-            fontWeight:   800, lineHeight: 1.1,
-            color:        '#fff', margin: '0 0 14px',
+            fontWeight:   800, lineHeight: 1.08,
+            color:        '#fff', margin: '0 0 16px',
             letterSpacing: '-0.03em',
             textShadow:   '0 2px 40px rgba(6,6,20,0.8)',
           }}>
-            Your AI physics tutor.<br />
+            Master physics visually.<br />
             <span style={{
               background:           'linear-gradient(135deg, #818cf8, #a78bfa)',
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor:  'transparent',
-            }}>Knows exactly what you don't.</span>
+            }}>AI finds every gap.</span>
           </h1>
           <p style={{
             fontSize:  'clamp(13px, 1.4vw, 16px)',
             lineHeight: 1.65,
             color:     'rgba(255,255,255,0.6)',
             margin:     0,
-            maxWidth:   460,
+            maxWidth:   480,
           }}>
-            Answer real physics cases. The AI pinpoints your gaps and tells you precisely what to review next.
+            Solve real physics cases, get instant AI feedback, and watch animations that make concepts click. Built by students, for students.
           </p>
           {/* Hold hint — appears only when not holding and not activated */}
           {!isHolding && !activated && (
@@ -467,7 +513,11 @@ export default function Landing() {
         {/* Dashboard — mounts in-place with Framer Motion, AnimatePresence handles exit */}
         <AnimatePresence>
           {showDashboard && (
-            <HeroDashboard key="hero-dashboard" onClose={reset} />
+            <HeroDashboard
+              key="hero-dashboard"
+              onClose={handleDashboardClose}
+              skipAnimation={hashActivated && !activated}
+            />
           )}
         </AnimatePresence>
 

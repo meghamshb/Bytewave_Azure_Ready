@@ -28,7 +28,7 @@ const preloadLearnChunks = () => {
   import('./LearnLayout').catch(() => {})
 }
 
-export default function HeroDashboard({ onClose }) {
+export default function HeroDashboard({ onClose, skipAnimation = false }) {
   const navigate    = useNavigate()
   const scrollRef   = useRef(null)
 
@@ -41,10 +41,10 @@ export default function HeroDashboard({ onClose }) {
   return (
     <motion.div
       ref={scrollRef}
-      initial={{ y: '100vh', opacity: 0 }}
+      initial={skipAnimation ? { y: 0, opacity: 1 } : { y: '100vh', opacity: 0 }}
       animate={{ y: 0,       opacity: 1 }}
       exit={{    y: '100vh', opacity: 0 }}
-      transition={{ type: 'spring', damping: 30, stiffness: 220 }}
+      transition={skipAnimation ? { duration: 0 } : { type: 'spring', damping: 30, stiffness: 220 }}
       style={{
         position:   'fixed',
         inset:      0,
@@ -85,7 +85,7 @@ export default function HeroDashboard({ onClose }) {
         {/* Right: CTA + close */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <button
-            onClick={() => navigate('/learn')}
+            onClick={() => navigate('/auth')}
             onMouseEnter={preloadLearnChunks}
             style={{
               padding:      '7px 18px',
@@ -100,7 +100,7 @@ export default function HeroDashboard({ onClose }) {
               letterSpacing: '0.01em',
             }}
           >
-            Start learning →
+            Sign Up →
           </button>
 
           {onClose && (
@@ -195,15 +195,19 @@ export default function HeroDashboard({ onClose }) {
           fontFamily:   'var(--font-display)',
           fontSize:     'clamp(28px, 5vw, 54px)',
           fontWeight:   800,
-          lineHeight:   1.1,
+          lineHeight:   1.08,
           color:        '#fff',
           margin:       '0 0 18px',
           letterSpacing: '-0.03em',
           maxWidth:     680,
           position:     'relative',
         }}>
-          The AI tutor that finds your gaps,
-          not just gives you answers.
+          Master physics visually.{' '}
+          <span style={{
+            background: 'linear-gradient(135deg, #818cf8, #a78bfa)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+          }}>AI finds every gap.</span>
         </h1>
 
         <p style={{
@@ -214,7 +218,7 @@ export default function HeroDashboard({ onClose }) {
           margin:      '0 0 36px',
           position:    'relative',
         }}>
-          See how it works — scroll through the story below.
+          Scroll through to see how it works — real cases, instant AI feedback, and visual animations.
         </p>
 
         {/* Scroll cue */}
@@ -334,7 +338,7 @@ export default function HeroDashboard({ onClose }) {
 
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
             <button
-              onClick={() => navigate('/learn')}
+              onClick={() => navigate('/auth')}
               style={{
                 padding:      '15px 36px',
                 borderRadius: 12,
@@ -358,7 +362,7 @@ export default function HeroDashboard({ onClose }) {
                 e.currentTarget.style.boxShadow  = '0 6px 28px rgba(99,102,241,0.45)'
               }}
             >
-              Start learning for free →
+              Sign up free →
             </button>
 
             {onClose && (
@@ -423,11 +427,11 @@ export default function HeroDashboard({ onClose }) {
           {/* Right: nav links */}
           <nav style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
             {[
-              { label: 'AI Chat',   href: '/chat'            },
-              { label: 'Community', href: '/forum'           },
-              { label: 'Skill map', href: '/learn/skill-map' },
-            ].map(({ label, href }) => (
-              <a key={label} href={href} style={{
+              { label: 'AI Chat',   to: '/chat'            },
+              { label: 'Community', to: '/forum'           },
+              { label: 'Skill map', to: '/learn/skill-map' },
+            ].map(({ label, to }) => (
+              <Link key={label} to={to} style={{
                 padding: '6px 12px', borderRadius: 8,
                 fontSize: 13, fontWeight: 600,
                 color: 'rgba(255,255,255,0.45)', textDecoration: 'none',
@@ -435,7 +439,7 @@ export default function HeroDashboard({ onClose }) {
               }}
               onMouseEnter={e => { e.currentTarget.style.color = '#fff' }}
               onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.45)' }}
-              >{label}</a>
+              >{label}</Link>
             ))}
           </nav>
         </div>
@@ -467,7 +471,7 @@ export default function HeroDashboard({ onClose }) {
           .stats-grid      { grid-template-columns: 1fr 1fr !important; }
           .preview-grid    { grid-template-columns: 1fr !important; }
           .pricing-grid    { grid-template-columns: 1fr !important; }
-          .founder-flex    { flex-direction: column !important; text-align: center !important; }
+          .team-grid       { grid-template-columns: 1fr !important; }
         }
       `}</style>
     </motion.div>

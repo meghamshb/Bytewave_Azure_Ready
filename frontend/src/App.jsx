@@ -2,6 +2,7 @@ import { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { ThemeProvider } from './hooks/ThemeContext'
 import { AuthProvider, useAuth } from './hooks/useAuth'
+import useScrollRestoration from './hooks/useScrollRestoration'
 import LearnLayout from './components/LearnLayout'
 import PhysicsLoader from './components/PhysicsLoader'
 
@@ -63,6 +64,8 @@ function AuthRedirect({ children }) {
 }
 
 function AppRoutes() {
+  useScrollRestoration()
+
   return (
     <Suspense fallback={<PageFallback />}>
       <Routes>

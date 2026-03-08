@@ -9,12 +9,12 @@
  */
 
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import ScrollReveal from '../components/ScrollReveal'
-import DraggableTiles from '../components/DraggableTiles'
 import LiveDemo from '../components/LiveDemo'
+import TeamSection from '../components/TeamSection'
+import MediaPreviewCard from '../components/MediaPreviewCard'
 import WaitlistSection from '../components/WaitlistSection'
-import { PHYSICS_TOPICS } from '../physicsTopics'
 
 const S = {
   section: { padding: '80px 24px', maxWidth: 1100, margin: '0 auto' },
@@ -33,6 +33,7 @@ const S = {
 }
 
 export default function LandingReveal() {
+  const navigate = useNavigate()
   const [communityStats, setCommunityStats] = useState(null)
 
   useEffect(() => {
@@ -177,9 +178,18 @@ export default function LandingReveal() {
         </div>
       </ScrollReveal>
 
+      {/* ── Animation preview ── */}
+      <ScrollReveal>
+        <section style={{ ...S.section, paddingBottom: 40 }}>
+          <h2 style={S.sectionTitle}>See it in action</h2>
+          <p style={S.sectionSub}>AI-generated animations make abstract physics concepts click instantly.</p>
+          <MediaPreviewCard />
+        </section>
+      </ScrollReveal>
+
       {/* ── Live Demo ── */}
       <ScrollReveal>
-        <section style={{ ...S.section }} id="live-demo">
+        <section style={{ ...S.section, scrollMarginTop: 70 }} id="live-demo">
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '5px 14px', borderRadius: 100, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', marginBottom: 20 }}>
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#22c55e', display: 'inline-block', animation: 'pulse-dot 1.8s ease-in-out infinite' }} />
             <span style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', letterSpacing: '0.09em' }}>LIVE DEMO · NO SIGN-UP</span>
@@ -192,7 +202,7 @@ export default function LandingReveal() {
 
       {/* ── How it works ── */}
       <ScrollReveal>
-        <section style={{ ...S.section }} id="how-it-works">
+        <section style={{ ...S.section, scrollMarginTop: 70 }} id="how-it-works">
           <h2 style={S.sectionTitle}>How it works</h2>
           <p style={S.sectionSub}>Four steps from zero to mastery</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 0, maxWidth: 960, margin: '0 auto', position: 'relative' }}>
@@ -246,15 +256,6 @@ export default function LandingReveal() {
         </div>
       </ScrollReveal>
 
-      {/* ── Physics topic tiles ── */}
-      <ScrollReveal>
-        <DraggableTiles
-          items={PHYSICS_TOPICS}
-          title="10 physics topics"
-          subtitle="Drag the tiles around — each one has practice cases waiting for you."
-        />
-      </ScrollReveal>
-
       {/* ── Community teaser ── */}
       <ScrollReveal>
         <section style={S.section}>
@@ -305,21 +306,9 @@ export default function LandingReveal() {
         </section>
       </ScrollReveal>
 
-      {/* ── Founder story ── */}
+      {/* ── Team / builders section ── */}
       <ScrollReveal>
-        <section style={{ ...S.section, background: 'var(--bg-card)', borderTop: '1px solid var(--border-light)', borderBottom: '1px solid var(--border-light)' }}>
-          <div className="founder-flex" style={{ maxWidth: 720, margin: '0 auto', display: 'flex', gap: 40, alignItems: 'center', flexWrap: 'wrap' }}>
-            <div style={{ width: 90, height: 90, borderRadius: '50%', flexShrink: 0, background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32, fontWeight: 800, color: '#fff', boxShadow: '0 8px 32px rgba(99,102,241,0.35)' }}>M</div>
-            <div style={{ flex: 1, minWidth: 240 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--accent-main)', marginBottom: 12, textTransform: 'uppercase' }}>Why we built this</div>
-              <blockquote style={{ margin: 0, padding: 0, fontSize: 16, lineHeight: 1.75, color: 'var(--primary-text)', fontStyle: 'italic' }}>
-                "I failed my Grade 11 physics midterm. Not because I didn't study — I re-read every chapter twice. I just had no idea which concepts I was actually getting wrong. I wished there was a tool that could just tell me. So I built it."
-              </blockquote>
-              <div style={{ marginTop: 16, fontSize: 13, fontWeight: 700, color: 'var(--primary-text)' }}>Meghamsh Balantrapu</div>
-              <div style={{ fontSize: 12, color: 'var(--primary-text-muted)', marginTop: 2 }}>Founder, Byte Wave · High school student turned builder</div>
-            </div>
-          </div>
-        </section>
+        <TeamSection />
       </ScrollReveal>
 
       {/* ── Pricing ── */}
@@ -338,9 +327,9 @@ export default function LandingReveal() {
                   <span style={{ fontSize: 13, color: 'var(--primary-text)' }}>{f}</span>
                 </div>
               ))}
-              <Link to="/learn" style={{ display: 'block', textAlign: 'center', marginTop: 24, padding: '12px', borderRadius: 10, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', fontSize: 14, fontWeight: 700, textDecoration: 'none', boxShadow: '0 4px 16px rgba(99,102,241,0.35)' }}>
-                Join free beta →
-              </Link>
+              <button onClick={() => navigate('/auth')} style={{ display: 'block', width: '100%', textAlign: 'center', marginTop: 24, padding: '12px', borderRadius: 10, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', fontSize: 14, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(99,102,241,0.35)' }}>
+                Sign up free →
+              </button>
             </div>
             <div style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(139,92,246,0.08))', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 20, padding: '32px 28px', position: 'relative', overflow: 'hidden' }}>
               <div style={{ position: 'absolute', top: 16, right: 16, background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: '#fff', fontSize: 10, fontWeight: 800, padding: '3px 10px', borderRadius: 100, letterSpacing: '0.06em' }}>COMING SOON</div>
@@ -376,7 +365,6 @@ export default function LandingReveal() {
           .stats-grid    { grid-template-columns: 1fr !important; }
           .diff-grid     { grid-template-columns: 1fr !important; }
           .pricing-grid  { grid-template-columns: 1fr !important; }
-          .founder-flex  { flex-direction: column !important; }
         }
       `}</style>
     </>

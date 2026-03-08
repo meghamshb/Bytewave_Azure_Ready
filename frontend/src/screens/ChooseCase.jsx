@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import CaseCard from '../components/CaseCard'
 import MasteryScore from '../components/MasteryScore'
 import Skeleton from '../components/Skeleton'
@@ -64,6 +64,21 @@ export default function ChooseCase() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+      {/* Back link */}
+      <Link to="/learn/skill-map" style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        fontSize: 13, fontWeight: 600, color: 'var(--primary-text-muted)',
+        textDecoration: 'none', transition: 'color 0.15s',
+      }}
+        onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent-main)' }}
+        onMouseLeave={e => { e.currentTarget.style.color = 'var(--primary-text-muted)' }}
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
+        </svg>
+        Skill Map
+      </Link>
 
       {/* Page header with mastery */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, flexWrap: 'wrap' }}>

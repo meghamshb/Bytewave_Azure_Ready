@@ -201,14 +201,18 @@ function MasteryRing({ percent = 0, label = 'Overall', size = 100 }) {
 
 // ─── Topic progress row ───────────────────────────────────────────────────────
 function TopicProgressRow({ name, mastery, status, onClick }) {
+  const [hover, setHover] = useState(false)
   const color = status === 'Mastered' ? 'var(--accent-success)' : status === 'In progress' ? 'var(--accent-warning)' : 'var(--border-medium)'
   return (
     <button
       type="button" onClick={onClick}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       style={{
         display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px',
-        borderRadius: 10, background: 'none', border: 'none', cursor: 'pointer',
+        borderRadius: 10, background: hover ? 'rgba(99,102,241,0.06)' : 'none',
+        border: 'none', cursor: 'pointer',
         width: '100%', textAlign: 'left',
+        transition: 'background 0.15s',
       }}
     >
       <div style={{
@@ -290,15 +294,17 @@ export default function Home() {
   const stats = useMemo(() => {
     const mastered   = progress.filter(n => n.status === 'Mastered').length
     const inProgress = progress.filter(n => n.status === 'In progress').length
+    const notStarted = progress.filter(n => n.status === 'Not started').length
     const attempted  = progress.filter(n => n.status !== 'Not started')
     const overallPct = attempted.length
       ? Math.round(attempted.reduce((s, n) => s + (n.mastery_score ?? 0), 0) / attempted.length)
       : 0
-    return { mastered, inProgress, overallPct }
+    return { mastered, inProgress, notStarted, overallPct, total: progress.length }
   }, [progress])
 
   const displayName = user?.name || 'Student'
   const goToCase    = (skillId) => { track(EVENTS.CASE_STARTED, { skill: skillId }); navigate('/learn/choose-case?skill=' + skillId) }
+  const primaryRec  = nextForYou[0] ?? null
 
   const handleOnboardingDone = () => {
     markDone()
@@ -313,219 +319,200 @@ export default function Home() {
         )}
       </AnimatePresence>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 1100, margin: '0 auto' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1100, margin: '0 auto' }}>
 
-        {/* ── Greeting ── */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-          <div>
-            <h1 style={{
-              margin: '0 0 4px', fontFamily: 'var(--font-display)',
-              fontSize: 28, fontWeight: 800, color: 'var(--primary-text)', letterSpacing: '-0.03em',
-            }}>
-              {getGreeting()}, {displayName} 👋
-            </h1>
-            <p style={{ margin: 0, fontSize: 14, color: 'var(--primary-text-muted)' }}>
-              Your personalised physics study plan — pick up where you left off.
-            </p>
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              type="button"
-              onClick={() => navigate('/learn/skill-map')}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '8px 16px', borderRadius: 10,
-                border: '1px solid var(--border-medium)',
-                background: 'var(--bg-card)', color: 'var(--primary-text)',
-                fontSize: 13, fontWeight: 600, cursor: 'pointer',
-              }}
-            >
-              Skill map <IcoArrow />
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate('/chat')}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '8px 16px', borderRadius: 10,
-                background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
-                border: 'none', color: '#fff',
-                fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                boxShadow: '0 4px 14px rgba(99,102,241,0.35)',
-              }}
-            >
-              Ask AI <IcoZap />
-            </button>
+        {/* ── Hero: Progress summary + primary CTA ── */}
+        <div style={{
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-light)',
+          borderRadius: 20, padding: '24px 28px',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 28, flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 240 }}>
+              <h1 style={{
+                margin: '0 0 6px', fontFamily: 'var(--font-display)',
+                fontSize: 26, fontWeight: 800, color: 'var(--primary-text)', letterSpacing: '-0.03em',
+              }}>
+                {getGreeting()}, {displayName}
+              </h1>
+              <p style={{ margin: '0 0 20px', fontSize: 14, color: 'var(--primary-text-muted)', lineHeight: 1.5 }}>
+                {loading
+                  ? 'Loading your study plan…'
+                  : stats.overallPct > 0
+                    ? `You've mastered ${stats.overallPct}% overall — keep building momentum.`
+                    : 'Start a case and the AI will build your personalised study plan.'
+                }
+              </p>
+
+              {!loading && primaryRec ? (
+                <button
+                  type="button"
+                  onClick={() => goToCase(primaryRec.item_id)}
+                  className="bw-hero-cta"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 8,
+                    padding: '12px 24px', borderRadius: 12,
+                    background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                    border: 'none', color: '#fff',
+                    fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                    boxShadow: '0 6px 20px rgba(99,102,241,0.4)',
+                    transition: 'transform 0.15s, box-shadow 0.15s',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 8px 28px rgba(99,102,241,0.5)' }}
+                  onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 6px 20px rgba(99,102,241,0.4)' }}
+                >
+                  Continue: {primaryRec.item_name} <IcoArrow />
+                </button>
+              ) : !loading ? (
+                <button
+                  type="button"
+                  onClick={() => navigate('/learn/choose-case?skill=motion')}
+                  className="bw-hero-cta"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 8,
+                    padding: '12px 24px', borderRadius: 12,
+                    background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                    border: 'none', color: '#fff',
+                    fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                    boxShadow: '0 6px 20px rgba(99,102,241,0.4)',
+                    transition: 'transform 0.15s, box-shadow 0.15s',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 8px 28px rgba(99,102,241,0.5)' }}
+                  onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 6px 20px rgba(99,102,241,0.4)' }}
+                >
+                  Start your first case <IcoArrow />
+                </button>
+              ) : null}
+            </div>
+
+            {/* Mastery ring */}
+            <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+              {loading
+                ? <Skeleton height={110} borderRadius={55} style={{ width: 110 }} />
+                : <MasteryRing percent={stats.overallPct} label="Overall mastery" size={110} />
+              }
+              {!loading && (
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+                  {[
+                    { color: 'var(--accent-success)', label: 'Mastered' },
+                    { color: 'var(--accent-warning)', label: 'Learning' },
+                    { color: 'var(--border-medium)',  label: 'New' },
+                  ].map(({ color, label }) => (
+                    <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <div style={{ width: 6, height: 6, borderRadius: '50%', background: color }} />
+                      <span style={{ fontSize: 10, color: 'var(--primary-text-muted)', fontWeight: 600 }}>{label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* ── Stats row ── */}
+        {/* ── Stats strip ── */}
         {loading ? (
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             {[0, 1, 2, 3].map(i => <Skeleton key={i} height={70} borderRadius={16} style={{ flex: '1 1 140px' }} delay={i * 0.1} />)}
           </div>
         ) : (
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <StatChip icon={<IcoStar />}  value={stats.overallPct > 0 ? `${stats.overallPct}%` : '—'} label="Overall mastery" color="var(--accent-success)" />
-            <StatChip icon={<IcoFlame />} value={stats.mastered}          label="Topics mastered" color="#f59e0b" />
-            <StatChip icon={<IcoZap />}   value={stats.inProgress}        label="In progress"     color="#818cf8" />
-            <StatChip icon={<IcoCheck />} value={`${stats.mastered + stats.inProgress}/${progress.length}`} label="Attempted" color="#34d399" />
+            <StatChip icon={<IcoFlame />} value={stats.mastered}    label="Mastered"    color="var(--accent-success)" />
+            <StatChip icon={<IcoZap />}   value={stats.inProgress} label="In progress" color="#818cf8" />
+            <StatChip icon={<IcoStar />}  value={stats.notStarted} label="To explore"  color="#f59e0b" />
+            <StatChip icon={<IcoCheck />} value={`${stats.total}`} label="Total topics" color="#34d399" />
           </div>
         )}
 
-        {/* ── Main grid ── */}
-        <div id="home-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 280px', gap: 20, alignItems: 'start' }}>
-
-          {/* ── Left column ── */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 24, minWidth: 0 }}>
-
-            {/* Next for you */}
-            <div style={{
-              background: 'var(--bg-card)',
-              border: '1px solid var(--border-light)',
-              borderRadius: 20, padding: '20px 20px 16px',
-              boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
-            }}>
-              <SectionHeader title="⚡ Next for you" action="See all" onAction={() => navigate('/learn/skill-map')} />
-              {loading ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {[0, 1, 2].map(i => <Skeleton key={i} height={72} borderRadius={14} delay={i * 0.12} />)}
-                </div>
-              ) : nextForYou.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {nextForYou.map(t => (
-                    <HeroRecommCard
-                      key={t.item_id}
-                      title={t.item_name}
-                      matchPercent={Math.round(t.match_score ?? 0)}
-                      masteryScore={t.mastery_score ?? 0}
-                      topicId={t.item_id}
-                      reason={t.reason}
-                      onClick={() => goToCase(t.item_id)}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <EmptyState message="No recommendations yet — complete a case to calibrate." cta="Browse skill map" onCta={() => navigate('/learn/skill-map')} />
-              )}
+        {/* ── Next for you ── */}
+        <div style={{
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-light)',
+          borderRadius: 20, padding: '20px 20px 16px',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+        }}>
+          <SectionHeader title="⚡ Next for you" action="See all" onAction={() => navigate('/learn/skill-map')} />
+          {loading ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {[0, 1, 2].map(i => <Skeleton key={i} height={72} borderRadius={14} delay={i * 0.12} />)}
             </div>
-
-            {/* Review + Ready to master side by side */}
-            {(review.length > 0 || readyToMaster.length > 0) && !loading && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                {review.length > 0 && (
-                  <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 18, padding: '16px 16px 12px' }}>
-                    <SectionHeader title="🔁 Review" />
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {review.map(t => (
-                        <RowCard key={t.item_id} title={t.item_name} reason={t.reason} topicId={t.item_id} tag="Review" tagColor="var(--accent-warning)" onClick={() => goToCase(t.item_id)} />
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {readyToMaster.length > 0 && (
-                  <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 18, padding: '16px 16px 12px' }}>
-                    <SectionHeader title="🏆 Close to mastered" />
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {readyToMaster.map(t => (
-                        <RowCard key={t.item_id} title={t.item_name} reason={t.reason} topicId={t.item_id} tag="Almost!" tagColor="var(--accent-success)" onClick={() => goToCase(t.item_id)} />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Quick start CTA if no recs */}
-            {!loading && nextForYou.length === 0 && review.length === 0 && (
-              <QuickStartPanel onStart={() => navigate('/learn/choose-case?skill=motion')} />
-            )}
-          </div>
-
-          {/* ── Right sidebar ── */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-            {/* Mastery ring */}
-            <div style={{
-              background: 'var(--bg-card)',
-              border: '1px solid var(--border-light)',
-              borderRadius: 20, padding: '20px',
-              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
-              boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
-            }}>
-              {loading
-                ? <Skeleton height={100} borderRadius={50} style={{ width: 100 }} />
-                : <MasteryRing percent={stats.overallPct} label="Overall mastery" size={110} />
-              }
-              {!loading && (
-                <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-                  {[
-                    { color: 'var(--accent-success)', label: 'Mastered' },
-                    { color: 'var(--accent-warning)', label: 'Learning' },
-                    { color: 'var(--border-medium)',  label: 'New' },
-                  ].map(({ color, label }) => (
-                    <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <div style={{ width: 7, height: 7, borderRadius: '50%', background: color }} />
-                      <span style={{ fontSize: 11, color: 'var(--primary-text-muted)', fontWeight: 600 }}>{label}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+          ) : nextForYou.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {nextForYou.map(t => (
+                <HeroRecommCard
+                  key={t.item_id}
+                  title={t.item_name}
+                  matchPercent={Math.round(t.match_score ?? 0)}
+                  masteryScore={t.mastery_score ?? 0}
+                  topicId={t.item_id}
+                  reason={t.reason}
+                  onClick={() => goToCase(t.item_id)}
+                />
+              ))}
             </div>
-
-            {/* Topic progress list */}
-            <div style={{
-              background: 'var(--bg-card)',
-              border: '1px solid var(--border-light)',
-              borderRadius: 20, padding: '16px 12px',
-              boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
-            }}>
-              <SectionHeader title="Topic progress" action="Full map" onAction={() => navigate('/learn/skill-map')} />
-              {loading
-                ? Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} height={32} borderRadius={8} delay={i * 0.08} style={{ marginBottom: 4 }} />)
-                : progress.slice(0, 7).map(n => (
-                    <TopicProgressRow
-                      key={n.skill_id}
-                      name={n.skill_name}
-                      mastery={n.mastery_score ?? 0}
-                      status={n.status}
-                      onClick={() => navigate('/learn/skill-map')}
-                    />
-                  ))
-              }
-            </div>
-
-            {/* Ask PhysiMate CTA */}
-            <div style={{
-              borderRadius: 20, padding: '18px',
-              background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.08))',
-              border: '1px solid rgba(99,102,241,0.25)',
-            }}>
-              <div style={{ fontSize: 20, marginBottom: 8 }}>🤖</div>
-              <p style={{ margin: '0 0 6px', fontSize: 13, fontWeight: 700, color: 'var(--primary-text)' }}>Got a physics question?</p>
-              <p style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--primary-text-muted)', lineHeight: 1.5 }}>
-                Ask PhysiMate — it generates an animated explanation and simulation.
-              </p>
-              <button
-                type="button"
-                onClick={() => navigate('/chat')}
-                style={{
-                  padding: '9px 16px', borderRadius: 10, fontSize: 12, fontWeight: 700,
-                  background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
-                  color: '#fff', border: 'none', cursor: 'pointer',
-                  width: '100%', boxShadow: '0 4px 12px rgba(99,102,241,0.3)',
-                }}
-              >
-                Open AI Chat →
-              </button>
-            </div>
-          </div>
+          ) : (
+            <EmptyState message="Complete your first case and we'll personalise this section for you." cta="Explore the skill map" onCta={() => navigate('/learn/skill-map')} />
+          )}
         </div>
 
-        {/* Responsive fix for small screens */}
+        {/* ── Review + Ready to master ── */}
+        {(review.length > 0 || readyToMaster.length > 0) && !loading && (
+          <div id="home-review-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            {review.length > 0 && (
+              <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 18, padding: '16px 16px 12px' }}>
+                <SectionHeader title="🔁 Review" />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {review.map(t => (
+                    <RowCard key={t.item_id} title={t.item_name} reason={t.reason} topicId={t.item_id} tag="Review" tagColor="var(--accent-warning)" onClick={() => goToCase(t.item_id)} />
+                  ))}
+                </div>
+              </div>
+            )}
+            {readyToMaster.length > 0 && (
+              <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 18, padding: '16px 16px 12px' }}>
+                <SectionHeader title="🏆 Close to mastered" />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {readyToMaster.map(t => (
+                    <RowCard key={t.item_id} title={t.item_name} reason={t.reason} topicId={t.item_id} tag="Almost!" tagColor="var(--accent-success)" onClick={() => goToCase(t.item_id)} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Topic progress (full-width) ── */}
+        <div style={{
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-light)',
+          borderRadius: 20, padding: '20px 16px 12px',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+        }}>
+          <SectionHeader title="Topic progress" action="Full map" onAction={() => navigate('/learn/skill-map')} />
+          {loading ? (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 20px' }}>
+              {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} height={32} borderRadius={8} delay={i * 0.06} style={{ marginBottom: 4 }} />)}
+            </div>
+          ) : (
+            <div id="home-topics-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 20px' }}>
+              {progress.map(n => (
+                <TopicProgressRow
+                  key={n.skill_id}
+                  name={n.skill_name}
+                  mastery={n.mastery_score ?? 0}
+                  status={n.status}
+                  onClick={() => goToCase(n.skill_id)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Responsive overrides */}
         <style>{`
-          @media (max-width: 760px) {
-            #home-grid { grid-template-columns: 1fr !important; }
+          @media (max-width: 640px) {
+            #home-review-grid { grid-template-columns: 1fr !important; }
+            #home-topics-grid { grid-template-columns: 1fr !important; }
           }
         `}</style>
       </div>
@@ -557,28 +544,3 @@ function EmptyState({ message, cta, onCta }) {
   )
 }
 
-function QuickStartPanel({ onStart }) {
-  return (
-    <div style={{
-      borderRadius: 20, padding: '28px 24px', textAlign: 'center',
-      background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(139,92,246,0.05))',
-      border: '1px dashed rgba(99,102,241,0.3)',
-    }}>
-      <div style={{ fontSize: 40, marginBottom: 12 }}>🚀</div>
-      <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 800, margin: '0 0 8px', color: 'var(--primary-text)' }}>
-        Ready to find your first gap?
-      </h3>
-      <p style={{ fontSize: 14, color: 'var(--primary-text-muted)', margin: '0 0 20px', lineHeight: 1.6 }}>
-        Complete your first case and the AI will build your personalised plan.
-      </p>
-      <button type="button" onClick={onStart} style={{
-        padding: '12px 28px', borderRadius: 12, fontSize: 14, fontWeight: 700,
-        background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
-        color: '#fff', border: 'none', cursor: 'pointer',
-        boxShadow: '0 6px 20px rgba(99,102,241,0.4)',
-      }}>
-        Start first case →
-      </button>
-    </div>
-  )
-}

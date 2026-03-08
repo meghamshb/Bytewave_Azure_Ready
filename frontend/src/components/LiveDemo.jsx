@@ -1,8 +1,47 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import { renderMathInText, containsLatex } from '../utils/renderMath'
+import 'katex/dist/katex.min.css'
 
 const DEMO_QUESTION = `A ball is thrown horizontally at 20 m/s from a cliff 45 m high. 
 How long does it take to hit the ground? How far from the base does it land?`
+
+function FeedbackResult({ text }) {
+  const hasLatex = containsLatex(text)
+  const html = useMemo(() => hasLatex ? renderMathInText(text) : null, [text, hasLatex])
+
+  return (
+    <div style={{
+      marginTop: 20, padding: '20px 24px', borderRadius: 16,
+      background: 'rgba(34,197,94,0.06)',
+      border: '1px solid rgba(34,197,94,0.2)',
+      animation: 'demo-fadein 0.4s ease',
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', letterSpacing: '0.1em', marginBottom: 10 }}>
+        AI FEEDBACK
+      </div>
+      {hasLatex ? (
+        <div
+          style={{ margin: 0, fontSize: 14, lineHeight: 1.75, color: 'var(--primary-text)' }}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      ) : (
+        <p style={{ margin: 0, fontSize: 14, lineHeight: 1.75, color: 'var(--primary-text)', whiteSpace: 'pre-wrap' }}>
+          {text}
+        </p>
+      )}
+      <Link to="/auth" style={{
+        display: 'inline-block', marginTop: 16,
+        padding: '10px 20px', borderRadius: 8,
+        background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff',
+        fontSize: 13, fontWeight: 700, textDecoration: 'none',
+        boxShadow: '0 3px 12px rgba(99,102,241,0.35)',
+      }}>
+        Sign up to continue →
+      </Link>
+    </div>
+  )
+}
 
 export default function LiveDemo() {
   const [answer,  setAnswer]  = useState('')
@@ -92,30 +131,7 @@ export default function LiveDemo() {
         </div>
       )}
 
-      {result && (
-        <div style={{
-          marginTop: 20, padding: '20px 24px', borderRadius: 16,
-          background: 'rgba(34,197,94,0.06)',
-          border: '1px solid rgba(34,197,94,0.2)',
-          animation: 'demo-fadein 0.4s ease',
-        }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', letterSpacing: '0.1em', marginBottom: 10 }}>
-            AI FEEDBACK
-          </div>
-          <p style={{ margin: 0, fontSize: 14, lineHeight: 1.75, color: 'var(--primary-text)', whiteSpace: 'pre-wrap' }}>
-            {result}
-          </p>
-          <Link to="/learn" style={{
-            display: 'inline-block', marginTop: 16,
-            padding: '10px 20px', borderRadius: 8,
-            background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff',
-            fontSize: 13, fontWeight: 700, textDecoration: 'none',
-            boxShadow: '0 3px 12px rgba(99,102,241,0.35)',
-          }}>
-            Continue with your full skill map →
-          </Link>
-        </div>
-      )}
+      {result && <FeedbackResult text={result} />}
 
       <style>{`
         @keyframes demo-fadein { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
