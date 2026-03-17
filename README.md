@@ -1,6 +1,6 @@
 # Byte Wave
 
-**AI-powered physics learning platform.** Ask any physics question — get a Manim animation, an interactive Matter.js simulation, adaptive JEE-caliber assessments, and a structured skill map.
+**AI-powered physics learning platform.** Ask any physics question — get a Manim animation, an interactive Matter.js simulation, adaptive caliber assessments, and a structured skill map.
 
 ## Project layout
 
